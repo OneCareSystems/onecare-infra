@@ -1,0 +1,143 @@
+services:
+
+  # ============================================================
+  # MySQL Database
+  # ============================================================
+  db:
+    image: mysql:8.4
+    container_name: onecare-db
+    restart: unless-stopped
+
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+
+    ports:
+      - "${DB_PORT}:3306"
+
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u${DB_USER}",
+          "-p${DB_PASSWORD}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    networks:
+      - onecare-network
+
+
+  # ============================================================
+  # Redis Cache
+  # ============================================================
+  cache:
+    image: redis:7-alpine
+    container_name: onecare-cache
+    restart: unless-stopped
+
+    ports:
+      - "${REDIS_PORT}:6379"
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+    networks:
+      - onecare-network
+
+
+  # ============================================================
+  # Spring Boot Backend
+  # ============================================================
+  backend:
+    build:
+      context: ../onecare-backend
+      dockerfile: Dockerfile
+
+    container_name: onecare-backend
+    restart: unless-stopped
+
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false
+      SPRING_DATASOURCE_USERNAME: ${DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+
+      SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.MySQLDialect
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+
+      SPRING_SQL_INIT_MODE: always
+      SPRING_SQL_INIT_SCHEMA_LOCATIONS: classpath:schema.sql
+
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_EXPIRY: ${JWT_ACCESS_TOKEN_EXPIRY}
+      JWT_REFRESH_TOKEN_EXPIRY: ${JWT_REFRESH_TOKEN_EXPIRY}
+
+      REDIS_HOST: cache
+      REDIS_PORT: 6379
+
+    ports:
+      - "${BACKEND_PORT}:8080"
+
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+
+    networks:
+      - onecare-network
+
+
+  # ============================================================
+  # React/Vite Frontend
+  # ============================================================
+  frontend:
+    build:
+      context: ../onecare-frontend
+      dockerfile: Dockerfile
+
+    container_name: onecare-frontend
+    restart: unless-stopped
+
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+
+    ports:
+      - "${FRONTEND_PORT}:3000"
+
+    networks:
+      - onecare-network
+
+
+# ============================================================
+# Volumes
+# ============================================================
+volumes:
+  mysql-data:
+    name: onecare-mysql-data
+
+
+# ============================================================
+# Network
+# ============================================================
+networks:
+  onecare-network:
+    name: onecare-network
+    driver: bridge
