@@ -121,6 +121,10 @@ services:
 
     ports:
       - "${FRONTEND_PORT}:3000"
+    
+    volumes:
+      - ../onecare-frontend:/app
+      - /app/node_modules
 
     networks:
       - onecare-network
