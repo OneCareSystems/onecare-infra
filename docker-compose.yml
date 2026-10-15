@@ -144,7 +144,8 @@ services:
       MAIN_DB_USER: ${DB_USER}
 
       # settings.py: CHATBOT_SERVICE_TOKEN must be >= 32 characters (Spring Boot -> Django auth)
-      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN}
+      # Fails fast with a clear message when the key is missing/empty instead of a Django traceback.
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?Set CHATBOT_SERVICE_TOKEN in .env (min 32 chars, see .env.example)}
       # FAISS index + uploaded PDFs, kept on a named volume instead of inside the container
       CHATBOT_STORAGE_DIR: /app/storage
 

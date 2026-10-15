@@ -868,14 +868,35 @@ without requiring developers to manually start each service.
 
 # Continuous Integration
 
-Pushes and pull requests to `develop` run `.github/workflows/chatbot-ci.yml`, which:
+CI runs on pushes and pull requests to `develop` / `main`. Two workflows are involved.
 
-1. Checks out the chatbot repository.
-2. Starts a MySQL 8 service container.
-3. Validates dependency pins (`scripts/check_pins.py`).
-4. Runs `ruff` lint.
-5. Runs the test suite (`pytest -m "not embedding and not slow"`) against MySQL.
-6. Runs `pip-audit` vulnerability scanning.
-7. Builds the chatbot Docker image.
-8. Validates `docker-compose.yml` with `docker compose config`.
+## This repository — `.github/workflows/ci.yml`
+
+Job `compose-validation`:
+
+1. Validates `docker-compose.yml` against `.env.example`
+   (`docker compose --env-file .env.example config --quiet`) — this is the clean-checkout
+   state, where no `.env` exists yet, so a documented command must resolve before anything starts.
+2. Fails if a secret is hard-coded in `docker-compose.yml` (values must come from `.env` via `${VAR}`).
+3. Fails if any variable read by `docker-compose.yml` is missing from `.env.example`.
+
+## Chatbot repository — `.github/workflows/ci.yml`
+
+Job `chatbot` (the chat service, one job):
+
+1. Checks out the chatbot repository and installs Python 3.11.9.
+2. Validates dependency pins (`scripts/check_pins.py`).
+3. Runs `ruff check .`.
+4. Starts a MySQL 8 service container, waits until it accepts logins, then provisions the
+   dedicated schema and restricted user (`db/create_chatbot_schema.ps1`) plus the CI stand-in schema.
+5. Runs `python manage.py migrate`, asserts a **second migrate is a no-op** (AC3 idempotency),
+   and `python manage.py makemigrations --check --dry-run`.
+6. Runs the test suite `pytest -m "not embedding"` **against MySQL 8** (with coverage).
+7. Runs `pip-audit` vulnerability scanning.
+8. Builds the chatbot Docker image (`docker build -t onecare-chat .`).
+
+Job `embedding-smoke` runs the embedding smoke test as a **separate** job (INFRA-02).
+
+> The chatbot Docker image runs `scripts/entrypoint.sh`, which applies migrations and only then
+> starts gunicorn; a migration failure exits non-zero and stops the container (AC3).
 
