@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  compose-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # AC1 / TR5: on a clean checkout only .env.example exists, so the documented
+      # `docker compose up --build` must resolve with it before anything is started.
+      # (Build contexts do not need to exist for `config`, so no sibling checkout.)
+      - name: Validate docker-compose.yml against .env.example
+        run: docker compose --env-file .env.example config --quiet
+
+      # Test requirement: no secrets in the Compose file.
+      # Values must come from .env (git-ignored) via ${VAR} interpolation.
+      - name: Reject hard-coded secrets in docker-compose.yml
+        run: |
+          if grep -nE '^[[:space:]]+[A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*:[[:space:]]+[^$[:space:]].*' docker-compose.yml; then
+            echo "::error::docker-compose.yml contains a hard-coded secret - move it to .env"
+            exit 1
+          fi
+          echo "No hard-coded secrets found in docker-compose.yml"
+
+      # TR3: every variable the stack reads must be documented in .env.example,
+      # otherwise a clean checkout starts with empty configuration.
+      - name: Every variable used by docker-compose.yml exists in .env.example
+        run: |
+          missing=0
+          for v in $(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*' docker-compose.yml | sed 's/^${//' | sort -u); do
+            if ! grep -qE "^${v}=" .env.example; then
+              echo "::error::.env.example is missing ${v}"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 0 ]; then
+            echo "All compose variables are documented in .env.example"
+          fi
+          exit $missing

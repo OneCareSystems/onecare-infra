@@ -1,3 +1,4 @@
+
 # OneCare Infrastructure
 
 Infrastructure and local development environment for the **OneCare Clinic Management System**.
@@ -8,6 +9,7 @@ This repository provides a Docker Compose environment that runs the complete One
 * Spring Boot Backend
 * MySQL Database
 * Redis Cache
+* Django Chatbot
 
 The goal is to allow developers to start the complete local environment without manually installing or configuring MySQL, Redis, or the backend/frontend runtime environments.
 
@@ -15,7 +17,7 @@ The goal is to allow developers to start the complete local environment without 
 
 ## Architecture
 
-The infrastructure consists of four services:
+The infrastructure consists of five services:
 
 ```text
                          OneCare Local Environment
@@ -31,9 +33,12 @@ The infrastructure consists of four services:
               │                   │                   │
               └──────────────┬────┴───────────────────┘
                              │
-                             ▼
-                           Redis
-                         Port 6379
+              ┌──────────────┴──────────────┐
+              │                             │
+              ▼                             ▼
+            Redis                       Chatbot
+          Port 6379                     Django
+                                     Port 8000
 ```
 
 ### Services
@@ -44,12 +49,13 @@ The infrastructure consists of four services:
 | Backend  | Spring Boot + Java 21 | `8080` | REST API and business logic |
 | Database | MySQL 8.4             | `3306` | Persistent application data |
 | Cache    | Redis 7               | `6379` | Caching and temporary data  |
+| Chatbot  | Django 5 + DRF        | `8000` | AI chat service             |
 
 ---
 
 ## Repository Structure
 
-The OneCare project uses separate repositories for the frontend, backend, and infrastructure.
+The OneCare project uses separate repositories for the frontend, backend, chatbot, and infrastructure.
 
 The repositories should be cloned into the same parent directory:
 
@@ -59,6 +65,11 @@ OneCare/
 │   ├── Dockerfile
 │   ├── pom.xml
 │   └── src/
+├── onecare-chatbot/
+│   ├── Dockerfile
+│   ├── manage.py
+│   ├── requirements.txt
+│   └── onecare_chat/
 │
 ├── onecare-frontend/
 │   ├── Dockerfile
@@ -72,7 +83,7 @@ OneCare/
     └── README.md
 ```
 
-The Docker Compose file uses the backend and frontend repositories as local Docker build contexts.
+The Docker Compose file uses the backend, chatbot, and frontend repositories as local Docker build contexts.
 
 ---
 
@@ -102,12 +113,13 @@ docker compose version
 
 ## 1. Clone the repositories
 
-Clone the three repositories into the same parent directory.
+Clone the four repositories into the same parent directory.
 
 Example:
 
 ```bash
 git clone https://github.com/OneCareSystems/onecare-backend
+git clone https://github.com/OneCareSystems/onecare-chatbot
 git clone https://github.com/OneCareSystems/onecare-frontend
 git clone https://github.com/OneCareSystems/onecare-infra
 ```
@@ -117,11 +129,12 @@ The resulting structure should be:
 ```text
 OneCare/
 ├── onecare-backend/
+├── onecare-chatbot/
 ├── onecare-frontend/
 └── onecare-infra/
 ```
 
-> **Important:** Do not place the repositories inside each other. The three repositories must be sibling directories.
+> **Important:** Do not place the repositories inside each other. The repositories must be sibling directories.
 
 ---
 
@@ -165,6 +178,12 @@ BACKEND_PORT=8080
 
 FRONTEND_PORT=3000
 
+CHATBOT_PORT=8000
+# dedicated chatbot database; must match 01_schemas_and_users.sql (dev/CI only)
+CHATBOT_DB_PASSWORD=chatbot_dev_pw
+# Spring Boot -> Django token, at least 32 characters
+CHATBOT_SERVICE_TOKEN=<python -c "import secrets;print(secrets.token_urlsafe(48))">
+
 REDIS_HOST=cache
 REDIS_PORT=6379
 
@@ -198,16 +217,18 @@ docker compose up --build
 This command will:
 
 1. Build the backend Docker image.
-2. Build the frontend Docker image.
-3. Pull the MySQL image if it is not available locally.
-4. Pull the Redis image if it is not available locally.
-5. Create the Docker network.
-6. Create the MySQL persistent volume.
-7. Start MySQL.
-8. Wait for MySQL to become healthy.
-9. Start Redis.
-10. Start the Spring Boot backend.
-11. Start the React frontend.
+2. Build the chatbot Docker image.
+3. Build the frontend Docker image.
+4. Pull the MySQL image if it is not available locally.
+5. Pull the Redis image if it is not available locally.
+6. Create the Docker network.
+7. Create the MySQL persistent volume.
+8. Start MySQL.
+9. Wait for MySQL to become healthy.
+10. Start Redis.
+11. Start the Spring Boot backend.
+12. Start the Django chatbot (waits for MySQL to be healthy, runs migrations, then starts gunicorn).
+13. Start the React frontend.
 
 You do **not** need to manually run:
 
@@ -252,6 +273,7 @@ Expected services:
 ```text
 onecare-frontend
 onecare-backend
+onecare-chatbot
 onecare-db
 onecare-cache
 ```
@@ -294,6 +316,29 @@ localhost:3306
 localhost:6379
 ```
 
+### Chatbot
+
+```text
+http://localhost:8000
+```
+
+The chatbot publishes only on `127.0.0.1` (localhost). Health check:
+
+```text
+http://localhost:8000/api/chatbot/health/
+```
+
+The chatbot uses its **own** schema `onecare_chatbot` (user `chatbot_app`), never the main
+`onecare` database. Both are created by
+`../onecare-chatbot/docker/mysql/init/01_schemas_and_users.sql` on the **first** start of a
+fresh MySQL volume. If you had already been running the stack before this file was mounted,
+run once:
+
+```bash
+docker compose down -v
+docker compose up --build
+```
+
 > MySQL and Redis are infrastructure services and are normally accessed by the backend rather than directly through a browser.
 
 ---
@@ -314,6 +359,12 @@ Backend → Redis:
 
 ```text
 cache:6379
+```
+
+Backend → Chatbot:
+
+```text
+http://chatbot:8000
 ```
 
 Do **not** use:
@@ -338,6 +389,7 @@ Docker Compose provides DNS resolution using service names:
 db
 cache
 backend
+chatbot
 frontend
 ```
 
@@ -431,6 +483,12 @@ View Redis logs:
 docker compose logs -f cache
 ```
 
+View chatbot logs:
+
+```bash
+docker compose logs -f chatbot
+```
+
 ---
 
 # Rebuild a Service
@@ -447,6 +505,13 @@ If you modify the frontend:
 ```bash
 docker compose build frontend
 docker compose up frontend
+```
+
+If you modify the chatbot:
+
+```bash
+docker compose build chatbot
+docker compose up chatbot
 ```
 
 To rebuild everything:
@@ -642,12 +707,26 @@ The following variables are configured through `.env`:
 | `DB_PASSWORD`              | Application database password |
 | `DB_ROOT_PASSWORD`         | MySQL root password           |
 | `BACKEND_PORT`             | Backend host port             |
-| `FRONTEND_PORT`            | Frontend host port            |
+| `FRONTEND_PORT`            | Frontend host port (also the CORS origin allowed by the backend) |
+| `CHATBOT_PORT`             | Chatbot host port             |
+| `CHATBOT_DB_PASSWORD`      | Password of the dedicated `chatbot_app` database user |
+| `CHATBOT_SERVICE_TOKEN`    | Spring Boot → Django service token (min. 32 characters) |
+| `DJANGO_SECRET_KEY`        | Optional Django secret key (local development only) |
 | `REDIS_HOST`               | Redis Docker service hostname |
 | `REDIS_PORT`               | Redis host port               |
 | `JWT_SECRET`               | JWT signing secret            |
 | `JWT_ACCESS_TOKEN_EXPIRY`  | Access token expiration       |
 | `JWT_REFRESH_TOKEN_EXPIRY` | Refresh token expiration      |
+
+Derived inside `docker-compose.yml` (no separate variable needed):
+
+| Compose sets                              | Value                                             |
+| ----------------------------------------- | ------------------------------------------------- |
+| `FRONTEND_ALLOWED_ORIGINS` (backend)      | `http://localhost:FRONTEND_PORT`, `http://127.0.0.1:FRONTEND_PORT` |
+| `PASSWORD_RESET_FRONTEND_BASE_URL`        | `http://localhost:FRONTEND_PORT`                  |
+| `CHATBOT_URL` (backend)                   | `http://chatbot:8000/chat` (compose network)      |
+| `VITE_API_BASE_URL` (frontend)            | `http://localhost:BACKEND_PORT/api`               |
+| `DB_NAME` / `DB_USER` (chatbot)           | `onecare_chatbot` / `chatbot_app` (fixed by the chatbot repo) |
 
 ---
 
@@ -664,12 +743,16 @@ The following variables are configured through `.env`:
 
 # Current Infrastructure Model
 
-The current Docker Compose configuration builds the frontend and backend from their local repositories:
+The current Docker Compose configuration builds the frontend, backend, and chatbot from their local repositories:
 
 ```text
 onecare-infra
       │
       ├── ../onecare-backend
+      │          ↓
+      │      Docker build
+      │
+      ├── ../onecare-chatbot
       │          ↓
       │      Docker build
       │
@@ -747,6 +830,8 @@ This is **not required for the current local development setup** and can be intr
 * Node.js 20
 * Spring Boot
 * Java 21
+* Django
+* Python 3.11
 * MySQL 8.4
 * Redis 7
 * GitHub Actions
@@ -756,7 +841,7 @@ This is **not required for the current local development setup** and can be intr
 
 The purpose of this repository is to provide a **single local environment for the complete OneCare application**.
 
-After the three repositories are cloned into the correct structure, developers can start the entire environment with:
+After the repositories are cloned into the correct structure, developers can start the entire environment with:
 
 ```bash
 cd onecare-infra
@@ -770,9 +855,48 @@ React Frontend
       +
 Spring Boot Backend
       +
+Django Chatbot
+      +
 MySQL Database
       +
 Redis Cache
 ```
 
 without requiring developers to manually start each service.
+
+---
+
+# Continuous Integration
+
+CI runs on pushes and pull requests to `develop` / `main`. Two workflows are involved.
+
+## This repository — `.github/workflows/ci.yml`
+
+Job `compose-validation`:
+
+1. Validates `docker-compose.yml` against `.env.example`
+   (`docker compose --env-file .env.example config --quiet`) — this is the clean-checkout
+   state, where no `.env` exists yet, so a documented command must resolve before anything starts.
+2. Fails if a secret is hard-coded in `docker-compose.yml` (values must come from `.env` via `${VAR}`).
+3. Fails if any variable read by `docker-compose.yml` is missing from `.env.example`.
+
+## Chatbot repository — `.github/workflows/ci.yml`
+
+Job `chatbot` (the chat service, one job):
+
+1. Checks out the chatbot repository and installs Python 3.11.9.
+2. Validates dependency pins (`scripts/check_pins.py`).
+3. Runs `ruff check .`.
+4. Starts a MySQL 8 service container, waits until it accepts logins, then provisions the
+   dedicated schema and restricted user (`db/create_chatbot_schema.ps1`) plus the CI stand-in schema.
+5. Runs `python manage.py migrate`, asserts a **second migrate is a no-op** (AC3 idempotency),
+   and `python manage.py makemigrations --check --dry-run`.
+6. Runs the test suite `pytest -m "not embedding"` **against MySQL 8** (with coverage).
+7. Runs `pip-audit` vulnerability scanning.
+8. Builds the chatbot Docker image (`docker build -t onecare-chat .`).
+
+Job `embedding-smoke` runs the embedding smoke test as a **separate** job (INFRA-02).
+
+> The chatbot Docker image runs `scripts/entrypoint.sh`, which applies migrations and only then
+> starts gunicorn; a migration failure exits non-zero and stops the container (AC3).
+

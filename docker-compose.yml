@@ -8,6 +8,9 @@ services:
     container_name: onecare-db
     restart: unless-stopped
 
+    # Same charset/collation as onecare-chatbot (Django expects utf8mb4_0900_ai_ci)
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+
     environment:
       MYSQL_DATABASE: ${DB_NAME}
       MYSQL_USER: ${DB_USER}
@@ -19,6 +22,11 @@ services:
 
     volumes:
       - mysql-data:/var/lib/mysql
+      # INFRA-03: creates the chatbot's dedicated schema (onecare_chatbot) and its
+      # least-privilege user (chatbot_app) ONCE, on a fresh MySQL volume.
+      # Runs only at first initialisation -> use `docker compose down -v` if the
+      # volume predates this mount.
+      - ../onecare-chatbot/docker/mysql/init:/docker-entrypoint-initdb.d:ro
 
     healthcheck:
       test:
@@ -74,14 +82,13 @@ services:
     restart: unless-stopped
 
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
       SPRING_DATASOURCE_USERNAME: ${DB_USER}
       SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
       SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
 
       SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.MySQLDialect
-      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
-
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
       SPRING_SQL_INIT_MODE: always
       SPRING_SQL_INIT_SCHEMA_LOCATIONS: classpath:schema.sql
 
@@ -92,13 +99,84 @@ services:
       REDIS_HOST: cache
       REDIS_PORT: 6379
 
+      SPRING_MAIL_USERNAME: ${SPRING_MAIL_USERNAME}
+      SPRING_MAIL_PASSWORD: ${SPRING_MAIL_PASSWORD}
+
+      PASSWORD_RESET_FRONTEND_BASE_URL: ${PASSWORD_RESET_FRONTEND_BASE_URL}
+
+      FRONTEND_ALLOWED_ORIGINS: ${FRONTEND_ALLOWED_ORIGINS}
+      CHATBOT_URL: http://chatbot:8000/chat
+
+
     ports:
       - "${BACKEND_PORT}:8080"
-
     depends_on:
       db:
         condition: service_healthy
       cache:
+        condition: service_healthy
+
+    networks:
+      - onecare-network
+
+
+  # ============================================================
+  # Django Chatbot
+  # ============================================================
+  chatbot:
+    build:
+      context: ../onecare-chatbot
+      dockerfile: Dockerfile
+
+    container_name: onecare-chatbot
+    restart: unless-stopped
+
+    environment:
+      # INFRA-03: the chatbot owns a DEDICATED schema. db_config.py refuses to start
+      # unless DB_NAME is onecare_chatbot and DB_USER is not the Spring Boot user/root.
+      DB_NAME: ${CHATBOT_DB_NAME}
+      DB_USER: ${CHATBOT_DB_USER}
+      # Dev/CI password: must match 01_schemas_and_users.sql in the chatbot repo
+      # (that script is what GRANTs this user its least-privilege rights).
+      DB_PASSWORD: ${CHATBOT_DB_PASSWORD}
+      DB_HOST: db
+      DB_PORT: ${DB_PORT}
+      MAIN_DB_USER: ${DB_USER}
+
+      # settings.py: CHATBOT_SERVICE_TOKEN must be >= 32 characters (Spring Boot -> Django auth)
+      # Fails fast with a clear message when the key is missing/empty instead of a Django traceback.
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?Set CHATBOT_SERVICE_TOKEN in .env (min 32 chars, see .env.example)}
+      # FAISS index + uploaded PDFs, kept on a named volume instead of inside the container
+      CHATBOT_STORAGE_DIR: /app/storage
+
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DJANGO_DEBUG: "0"
+      ALLOWED_HOSTS: chatbot,backend
+
+    # Run Django migrations against the dedicated schema before serving
+    command: sh -c "python manage.py migrate && gunicorn onecare_chat.wsgi:application --bind 0.0.0.0:8000"
+
+    ports:
+      - "127.0.0.1:${CHATBOT_PORT:-8000}:8000"
+
+    volumes:
+      - chatbot_storage:/app/storage
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/chatbot/health/', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+    depends_on:
+      db:
         condition: service_healthy
 
     networks:
@@ -118,6 +196,7 @@ services:
 
     environment:
       CHOKIDAR_USEPOLLING: "true"
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL}
 
     ports:
       - "${FRONTEND_PORT}:3000"
@@ -136,6 +215,10 @@ services:
 volumes:
   mysql-data:
     name: onecare-mysql-data
+
+  # FAISS index + uploaded PDFs for the chatbot
+  chatbot_storage:
+    name: onecare-chatbot-storage
 
 
 # ============================================================
