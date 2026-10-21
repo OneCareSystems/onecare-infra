@@ -1,0 +1,134 @@
+# Staging deployment (DDP-#49 / DKR-06).
+#
+# Manually dispatches a frontend image rollout to the staging EC2 host
+# running the prod-like Compose stack (docker-compose.yml +
+# docker-compose.prod.yml).
+#
+# Required repository configuration (one time):
+#   secrets.STAGING_HOST       - public DNS/IP of the EC2 host
+#   secrets.STAGING_SSH_KEY    - private key (user with docker access on the host)
+#   secrets.GHCR_PULL_TOKEN    - token with read:packages (pulls the frontend
+#                                image from GHCR on the host; GITHUB_TOKEN is
+#                                scoped to THIS repo and cannot read the
+#                                frontend package)
+#   vars.STAGING_SSH_USER      - ssh user (default: ubuntu)
+#   vars.STAGING_REMOTE_DIR    - compose dir on the host (default: /opt/onecare)
+#
+# Image selection is always an explicit commit SHA pushed by the frontend CI
+# (tag sha-<commit>) - no `latest`, no rebuilds on the host. To ROLL BACK:
+# re-run this workflow with the previously deployed SHA (the deploy script
+# prints it, and also rolls back automatically if the new SHA fails its
+# health checks).
+#
+# Post-deploy: run the staging smoke suite from onecare-frontend
+# (Actions -> staging-smoke -> SMOKE_BASE_URL).
+
+name: deploy-staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "onecare-frontend commit SHA to deploy (as pushed by frontend CI, tag sha-<commit>)"
+        required: true
+        type: string
+      auto_rollback:
+        description: "Roll back to the previously deployed SHA if health checks fail"
+        required: false
+        type: boolean
+        default: true
+
+# Least privilege; the script only needs to read the repo (compose files).
+permissions:
+  contents: read
+
+# One staging deployment at a time; never cancel one mid-flight.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      REMOTE_DIR: ${{ vars.STAGING_REMOTE_DIR || '/opt/onecare' }}
+      SSH_USER: ${{ vars.STAGING_SSH_USER || 'ubuntu' }}
+
+    steps:
+      - name: Validate inputs and configuration
+        env:
+          IMAGE_SHA: ${{ inputs.image_sha }}
+          HOST: ${{ secrets.STAGING_HOST }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$IMAGE_SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::image_sha must be a hex commit SHA (7-40 chars), got '$IMAGE_SHA'"
+            exit 1
+          fi
+          if [ -z "$HOST" ]; then
+            echo "::error::secret STAGING_HOST is not configured"
+            exit 1
+          fi
+          if [ -z "$GHCR_PULL_TOKEN" ]; then
+            echo "::error::secret GHCR_PULL_TOKEN is not configured (read:packages)"
+            exit 1
+          fi
+          if ! [[ "$GHCR_PULL_TOKEN" =~ ^[A-Za-z0-9_]+$ ]]; then
+            echo "::error::GHCR_PULL_TOKEN contains unexpected characters"
+            exit 1
+          fi
+
+      - name: Checkout compose files
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SSH_KEY" ]; then
+            echo "::error::secret STAGING_SSH_KEY is not configured"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Copy compose files to the staging host
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -euo pipefail
+          scp docker-compose.yml docker-compose.prod.yml \
+            "${SSH_USER}@${HOST}:${REMOTE_DIR}/"
+
+      - name: Deploy (or roll back) the frontend image
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          IMAGE_SHA: ${{ inputs.image_sha }}
+          AUTO_ROLLBACK: ${{ inputs.auto_rollback }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          set -euo pipefail
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER}/onecare-frontend"
+          # shellcheck disable=SC2029 # expansion on the client side is
+          # intentional: every value was validated above (hex SHA, token
+          # charset) or comes from GitHub context, and the remote script
+          # re-validates its arguments.
+          ssh "${SSH_USER}@${HOST}" \
+            "bash -s -- '${IMAGE_SHA}' '${GHCR_PULL_TOKEN}' '${IMAGE}' '${{ github.actor }}' '${REMOTE_DIR}' '${AUTO_ROLLBACK}'" \
+            < scripts/deploy-staging.sh
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "Deployed frontend image: sha-${{ inputs.image_sha }}"
+          echo "Next: run the staging smoke suite in onecare-frontend" \
+               "(staging-smoke) with SMOKE_BASE_URL=https://<staging-host>"
+          echo "Rollback: re-run this workflow with the previous SHA." 
