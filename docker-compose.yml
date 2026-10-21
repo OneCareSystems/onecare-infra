@@ -110,6 +110,10 @@ services:
 
     ports:
       - "${BACKEND_PORT}:8080"
+    # No healthcheck yet: the backend exposes no health endpoint at all (no
+    # actuator, no /health) - companion ticket in DDP-#49 (DKR-04 AC3).
+    # Consumers must use `condition: service_started` until it lands, then
+    # switch to service_healthy on both sides.
     depends_on:
       db:
         condition: service_healthy
@@ -163,12 +167,16 @@ services:
       - chatbot_storage:/app/storage
 
     healthcheck:
+      # Live route is /internal/health (the old /api/chatbot/health/ URL was
+      # never routed) and it requires the Spring Boot -> Django service token,
+      # so the probe authenticates with the token already in this container's
+      # environment. 401 (wrong token) or unreachable => unhealthy.
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/chatbot/health/', timeout=5)",
+          "import os, urllib.request as u; r = u.Request('http://127.0.0.1:8000/internal/health', headers={'Authorization': 'Bearer ' + os.environ['CHATBOT_SERVICE_TOKEN']}); u.urlopen(r, timeout=5)",
         ]
       interval: 15s
       timeout: 10s

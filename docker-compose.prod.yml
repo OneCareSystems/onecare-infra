@@ -1,0 +1,93 @@
+# ============================================================
+# Prod-like mode (DDP-#49 / DKR-04)
+#
+# Layered on top of docker-compose.yml so there is ONE source of truth for
+# db / cache / backend / chatbot; only what changes for a production-style
+# run is restated here:
+#
+#   frontend  -> Dockerfile.prod image (dist/ + unprivileged nginx on 8080),
+#                no source bind-mounts, /healthz healthcheck, same-origin
+#                /api proxy pointing at the backend service
+#   ports     -> only the frontend is reachable from outside the host;
+#                db/cache/backend stay on loopback for SSH-tunnel access
+#                (browser traffic goes through the frontend's /api proxy)
+#
+# Usage (local prod-like run, builds the image first):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Usage (staging deploy — CI-built SHA image, never rebuilds):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull frontend
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+#
+# TLS/HTTPS is terminated at the edge (host/edge proxy or load balancer),
+# not inside these containers - see README "Security Notes".
+# ============================================================
+
+services:
+
+  # ---------------- MySQL: loopback only ----------------
+  db:
+    ports: !override
+      - "127.0.0.1:${DB_PORT}:3306"
+
+  # ---------------- Redis: loopback only ----------------
+  cache:
+    ports: !override
+      - "127.0.0.1:${REDIS_PORT}:6379"
+
+  # ---------------- Backend: loopback only ----------------
+  backend:
+    ports: !override
+      - "127.0.0.1:${BACKEND_PORT}:8080"
+    # TODO(companion ticket, DDP-#49/DKR-04 AC3): add a healthcheck once the
+    # backend exposes a real health endpoint (none exists today - no actuator,
+    # no /health). The frontend therefore waits with `service_started`; flip
+    # both sides to service_healthy in that ticket.
+
+  # ---------------- Frontend: production image ----------------
+  frontend:
+    # Tag pushed by the frontend CI on merges to develop/main (sha-<commit>).
+    # Local prod-like runs build and tag this same name, so no registry pull
+    # is needed. Never :latest - one SHA serves staging and production.
+    image: ${FRONTEND_IMAGE}
+    build:
+      context: ../onecare-frontend
+      dockerfile: Dockerfile.prod
+
+    environment: !override
+      # nginx resolves this per request via the Docker DNS, so the SPA
+      # serves traffic even while the backend container is still booting.
+      BACKEND_URL: http://backend:8080
+      NGINX_RESOLVER: 127.0.0.11
+      # Public runtime settings written to /config.json at container start.
+      # Same-origin default works in every environment; override per env
+      # only if the API lives on a different origin (never bake it in CI).
+      RUNTIME_API_BASE_URL: ${RUNTIME_API_BASE_URL:-/api}
+      # Match backend upload/timeout limits through the proxy.
+      CLIENT_MAX_BODY_SIZE: 25m
+      PROXY_READ_TIMEOUT: 300s
+
+    # The dev service bind-mounts the source tree; the prod image contains
+    # the built bundle, so those mounts are dropped entirely (!override
+    # replaces instead of merging).
+    volumes: !override []
+
+    # Frontend is the only published service; FRONTEND_BIND=127.0.0.1 when
+    # an edge proxy runs on the same host (TLS terminates there).
+    ports: !override
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT}:8080"
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # Condition: service_started (see backend TODO above). The nginx proxy
+    # resolves the backend at request time, so the frontend itself does not
+    # depend on backend readiness to become healthy.
+    depends_on:
+      backend:
+        condition: service_started
