@@ -298,11 +298,16 @@ http://localhost:3000
 http://localhost:8080
 ```
 
-<!-- ### Backend Health Check
+### Backend Health Check
 
 ```text
 http://localhost:8080/actuator/health
-``` -->
+```
+
+Returns HTTP 200 with `"status":"UP"`, or `"status":"DEGRADED"` when an
+optional integration (currently SMTP) is unreachable — both keep the
+container **healthy**. Only MySQL/Redis failures return HTTP 503 and mark
+the container unhealthy (AC4).
 
 ### MySQL
 
@@ -621,7 +626,10 @@ Also verify that the Spring Boot Actuator health endpoint is available:
 /actuator/health
 ```
 
-The backend Docker image must also contain the required health-check utility.
+The compose healthcheck probes it with `curl` (present in the backend's
+`eclipse-temurin` image). Expected answers: `200` for `UP` **and** for
+`DEGRADED` (e.g. SMTP unreachable — this is normal and must not block the
+stack); `503` means MySQL or Redis is down — check those services first.
 
 ---
 
@@ -705,9 +713,13 @@ differences restated:
   same-origin `/api` to the `backend` service
 - **only the frontend port is published**; MySQL, Redis, backend and chatbot
   stay on `127.0.0.1` (browser traffic goes through the frontend proxy)
-- the frontend waits for the backend with `service_started` — the backend
-  exposes no health endpoint yet (companion ticket); flip both to
-  `service_healthy` once it lands
+- **the frontend waits for the backend with `service_healthy`** — it starts
+  only once the backend's `/actuator/health` answers HTTP 200 (`UP` *or*
+  `DEGRADED`; SMTP outages deliberately stay healthy — AC4) and is held back
+  when MySQL/Redis are down (503)
+- **the backend runs the `staging` profile** in this layer by default; set
+  `SPRING_PROFILES_ACTIVE=prod` in `.env` for a production host (the base
+  layer alone defaults to `dev`)
 - TLS/HTTPS terminates at the edge (load balancer or host proxy), never
   inside the containers
 
@@ -795,6 +807,13 @@ The following variables are configured through `.env`:
 | `JWT_SECRET`               | JWT signing secret            |
 | `JWT_ACCESS_TOKEN_EXPIRY`  | Access token expiration       |
 | `JWT_REFRESH_TOKEN_EXPIRY` | Refresh token expiration      |
+| `SPRING_PROFILES_ACTIVE`   | Spring profile (`dev`/`staging`/`prod`); base layer defaults to `dev`, the prod-like layer to `staging` |
+| `BACKUP_ENCRYPTION_KEY`    | **Required** base64 AES-256-GCM key for backups (`openssl rand -base64 32`); compose `:?` gate |
+| `COLUMN_ENCRYPTION_KEY`    | Optional base64 AES-256 key for column encryption (empty = off) |
+| `SMTP_HOST`                | SMTP server host (unreachable ⇒ health `DEGRADED`, never blocks the stack) |
+| `SMTP_PORT`                | SMTP server port              |
+| `SMTP_USERNAME`            | SMTP user (e.g. email address) |
+| `SMTP_PASSWORD`            | SMTP password / app password  |
 | `RUNTIME_API_BASE_URL`     | Prod-like mode: API origin written to the frontend's `/config.json` (default `/api`) |
 | `FRONTEND_IMAGE`           | Prod-like mode: frontend image tag (`sha-<commit>` from GHCR, never `latest`) |
 | `FRONTEND_BIND`            | Prod-like mode: address the frontend port binds to (default `0.0.0.0`; `127.0.0.1` behind a same-host edge proxy) |
@@ -805,7 +824,7 @@ Derived inside `docker-compose.yml` (no separate variable needed):
 | ----------------------------------------- | ------------------------------------------------- |
 | `FRONTEND_ALLOWED_ORIGINS` (backend)      | `http://localhost:FRONTEND_PORT`, `http://127.0.0.1:FRONTEND_PORT` |
 | `PASSWORD_RESET_FRONTEND_BASE_URL`        | `http://localhost:FRONTEND_PORT`                  |
-| `CHATBOT_URL` (backend)                   | `http://chatbot:8000/chat` (compose network)      |
+| `CHATBOT_BASE_URL` (backend)                | `http://chatbot:8000` (compose network)           |
 | `VITE_API_BASE_URL` (frontend)            | `http://localhost:BACKEND_PORT/api`               |
 | `DB_NAME` / `DB_USER` (chatbot)           | `onecare_chatbot` / `chatbot_app` (fixed by the chatbot repo) |
 
@@ -816,9 +835,30 @@ Derived inside `docker-compose.yml` (no separate variable needed):
 * Never commit `.env`.
 * Never commit production secrets.
 * Use `.env.example` to document required variables.
-* Use strong values for `JWT_SECRET`.
+* Use strong values for `JWT_SECRET`, `BACKUP_ENCRYPTION_KEY` and
+  `COLUMN_ENCRYPTION_KEY` (`openssl rand -base64 32`) — no key defaults exist
+  on purpose (AC2/AC3).
 * Local development credentials must not be reused in production.
 * Production deployment should use a proper secrets-management solution.
+
+## Upgrading an existing deployment to DDP-#49
+
+The backend now boots a packaged profile (`SPRING_PROFILES_ACTIVE`, `dev` in
+the base layer, `staging` in the prod-like layer) and healthchecks against
+`/actuator/health`. Before the next `up` on a host whose `.env` predates this
+ticket:
+
+1. Add `BACKUP_ENCRYPTION_KEY` to the host `.env` (`openssl rand -base64 32`)
+   — compose refuses to start without it (`:?` gate).
+2. Add `SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD` (replacing the
+   old `SPRING_MAIL_USERNAME`/`SPRING_MAIL_PASSWORD`) — optional, but the
+   stack is unhealthy-free without them (health reports `DEGRADED`).
+3. Rebuild the backend image once (`docker compose build backend`) after the
+   backend repository contains the DDP-#49 actuator/profile changes — an
+   image without `/actuator/health` fails the healthcheck and (in the
+   prod-like layer) blocks the frontend.
+4. Staging hosts: `scripts/deploy-staging.sh` enforces
+   `SPRING_PROFILES_ACTIVE=staging` in the host `.env` automatically.
 
 ---
 

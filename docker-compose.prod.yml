@@ -36,14 +36,18 @@ services:
     ports: !override
       - "127.0.0.1:${REDIS_PORT}:6379"
 
-  # ---------------- Backend: loopback only ----------------
+  # ---------------- Backend: loopback only, staging profile ----------------
   backend:
     ports: !override
       - "127.0.0.1:${BACKEND_PORT}:8080"
-    # TODO(companion ticket, DDP-#49/DKR-04 AC3): add a healthcheck once the
-    # backend exposes a real health endpoint (none exists today - no actuator,
-    # no /health). The frontend therefore waits with `service_started`; flip
-    # both sides to service_healthy in that ticket.
+    environment:
+      # This layer serves the staging deploy (and local prod-like runs), so it
+      # defaults to the staging profile - overriding the base layer's dev
+      # default (AC3). Set SPRING_PROFILES_ACTIVE=prod in .env for a
+      # production host.
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-staging}
+    # The backend healthcheck itself comes from docker-compose.yml
+    # (/actuator/health; DEGRADED => HTTP 200), no restatement needed here.
 
   # ---------------- Frontend: production image ----------------
   frontend:
@@ -85,9 +89,10 @@ services:
       retries: 3
       start_period: 10s
 
-    # Condition: service_started (see backend TODO above). The nginx proxy
-    # resolves the backend at request time, so the frontend itself does not
-    # depend on backend readiness to become healthy.
+    # DDP-#49: the backend's /actuator/health returns 200 for UP *and*
+    # DEGRADED (SMTP outages must never block the frontend; AC4), 503 only
+    # when MySQL/Redis are down. compose `up` therefore holds the frontend
+    # until the backend is actually serving.
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy

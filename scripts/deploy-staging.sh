@@ -42,14 +42,19 @@ current_image() {
   grep -E '^FRONTEND_IMAGE=' .env | head -n1 | cut -d= -f2- || true
 }
 
-set_image() {
-  # upsert so older .env files without the variable still work
-  if grep -qE '^FRONTEND_IMAGE=' .env; then
-    sed -i.bak "s|^FRONTEND_IMAGE=.*|FRONTEND_IMAGE=$1|" .env
+# upsert so older .env files without the variable still work
+upsert_env() {
+  local key="$1" val="$2"
+  if grep -qE "^${key}=" .env; then
+    sed -i.bak "s|^${key}=.*|${key}=${val}|" .env
   else
-    printf '\n# set by deploy-staging.sh (DDP-#49 / DKR-06)\nFRONTEND_IMAGE=%s\n' "$1" >> .env
+    printf '\n# set by deploy-staging.sh (DDP-#49 / DKR-06)\n%s=%s\n' "$key" "$val" >> .env
   fi
-  log "FRONTEND_IMAGE -> $1"
+  log "${key} -> ${val}"
+}
+
+set_image() {
+  upsert_env FRONTEND_IMAGE "$1"
 }
 
 wait_healthy() {
@@ -84,6 +89,15 @@ check_endpoints() {
     *) log "/config.json missing or invalid: '$body'"; return 1 ;;
   esac
 
+  # DDP-#49: any 200 counts - DEGRADED (e.g. SMTP unreachable) is deliberately
+  # HTTP 200 so it must never fail a deploy (AC4); only DOWN (503, MySQL/Redis)
+  # fails. The prod layer binds the backend on 127.0.0.1:BACKEND_PORT.
+  bport="$(grep -E '^BACKEND_PORT=' .env | head -n1 | cut -d= -f2-)"
+  bport="${bport:-8080}"
+  code="$(curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${bport}/actuator/health" || echo 000)"
+  [ "$code" = "200" ] || { log "/actuator/health returned $code (expected 200)"; return 1; }
+  log "/actuator/health -> 200 (UP or DEGRADED)"
+
   # Any non-502/504 answer proves nginx reached the backend through the
   # service DNS (401/404/405 are all valid Spring responses).
   code="$(curl -s -o /dev/null -w '%{http_code}' "$base/api/__deploy_probe__")"
@@ -97,6 +111,9 @@ check_endpoints() {
 deploy_image() {
   local img="$1"
   set_image "$img"
+  # The staging host must always run the staging profile (AC3), even when
+  # .env was refreshed from .env.example (which says dev).
+  upsert_env SPRING_PROFILES_ACTIVE staging
   echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null 2>&1 \
     || { log "ghcr login failed"; return 1; }
   log "pulling $img"
