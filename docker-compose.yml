@@ -193,7 +193,7 @@ services:
 
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       DJANGO_DEBUG: "0"
-      ALLOWED_HOSTS: chatbot,backend
+      DJANGO_ALLOWED_HOSTS: chatbot,backend,localhost,127.0.0.1
 
     # Run Django migrations against the dedicated schema before serving
     command: sh -c "python manage.py migrate && gunicorn onecare_chat.wsgi:application --bind 0.0.0.0:8000"
