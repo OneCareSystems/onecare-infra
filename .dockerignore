@@ -1,0 +1,15 @@
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+
+# Version control and local editor state
+.git
+.vscode
+
+# Local-only Compose overrides
+docker-compose.local.yml
+
+# Common generated files
+.DS_Store
+Thumbs.db
