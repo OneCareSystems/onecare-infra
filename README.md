@@ -712,7 +712,8 @@ differences restated:
   nginx on port 8080, no source bind-mounts), reports `/healthz`, and proxies
   same-origin `/api` to the `backend` service
 - **only the frontend port is published**; MySQL, Redis, backend and chatbot
-  stay on `127.0.0.1` (browser traffic goes through the frontend proxy)
+  have no host port mappings and are reachable only on the internal Compose
+  network (browser traffic goes through the frontend proxy)
 - **the frontend waits for the backend with `service_healthy`** — it starts
   only once the backend's `/actuator/health` answers HTTP 200 (`UP` *or*
   `DEGRADED`; SMTP outages deliberately stay healthy — AC4) and is held back
@@ -1022,4 +1023,3 @@ Job `embedding-smoke` runs the embedding smoke test as a **separate** job (INFRA
 
 > The chatbot Docker image runs `scripts/entrypoint.sh`, which applies migrations and only then
 > starts gunicorn; a migration failure exits non-zero and stops the container (AC3).
-

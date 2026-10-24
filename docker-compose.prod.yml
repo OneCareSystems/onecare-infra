@@ -8,8 +8,8 @@
 #   frontend  -> Dockerfile.prod image (dist/ + unprivileged nginx on 8080),
 #                no source bind-mounts, /healthz healthcheck, same-origin
 #                /api proxy pointing at the backend service
-#   ports     -> only the frontend is reachable from outside the host;
-#                db/cache/backend stay on loopback for SSH-tunnel access
+#   ports     -> only the frontend is published to the host; db/cache/backend/
+#                chatbot are reachable only on the internal Compose network
 #                (browser traffic goes through the frontend's /api proxy)
 #
 # Usage (local prod-like run, builds the image first):
@@ -26,20 +26,17 @@
 
 services:
 
-  # ---------------- MySQL: loopback only ----------------
+  # ---------------- MySQL: internal network only ----------------
   db:
-    ports: !override
-      - "127.0.0.1:${DB_PORT}:3306"
+    ports: !override []
 
-  # ---------------- Redis: loopback only ----------------
+  # ---------------- Redis: internal network only ----------------
   cache:
-    ports: !override
-      - "127.0.0.1:${REDIS_PORT}:6379"
+    ports: !override []
 
-  # ---------------- Backend: loopback only, staging profile ----------------
+  # ---------------- Backend: internal network only ----------------
   backend:
-    ports: !override
-      - "127.0.0.1:${BACKEND_PORT}:8080"
+    ports: !override []
     environment:
       # This layer serves the staging deploy (and local prod-like runs), so it
       # defaults to the staging profile - overriding the base layer's dev
@@ -48,6 +45,10 @@ services:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-staging}
     # The backend healthcheck itself comes from docker-compose.yml
     # (/actuator/health; DEGRADED => HTTP 200), no restatement needed here.
+
+  # ---------------- Chatbot: internal network only ----------------
+  chatbot:
+    ports: !override []
 
   # ---------------- Frontend: production image ----------------
   frontend:
