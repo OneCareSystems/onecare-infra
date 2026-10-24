@@ -298,11 +298,16 @@ http://localhost:3000
 http://localhost:8080
 ```
 
-<!-- ### Backend Health Check
+### Backend Health Check
 
 ```text
 http://localhost:8080/actuator/health
-``` -->
+```
+
+Returns HTTP 200 with `"status":"UP"`, or `"status":"DEGRADED"` when an
+optional integration (currently SMTP) is unreachable — both keep the
+container **healthy**. Only MySQL/Redis failures return HTTP 503 and mark
+the container unhealthy (AC4).
 
 ### MySQL
 
@@ -621,7 +626,10 @@ Also verify that the Spring Boot Actuator health endpoint is available:
 /actuator/health
 ```
 
-The backend Docker image must also contain the required health-check utility.
+The compose healthcheck probes it with `curl` (present in the backend's
+`eclipse-temurin` image). Expected answers: `200` for `UP` **and** for
+`DEGRADED` (e.g. SMTP unreachable — this is normal and must not block the
+stack); `503` means MySQL or Redis is down — check those services first.
 
 ---
 
@@ -694,6 +702,89 @@ docker compose up --build
 
 ---
 
+# Prod-like mode (DDP-#49 / DKR-04)
+
+`docker-compose.prod.yml` layers a production-style run on top of the normal
+stack — one source of truth for db/cache/backend/chatbot, with only the
+differences restated:
+
+- **frontend** runs `Dockerfile.prod` (built `dist/` served by unprivileged
+  nginx on port 8080, no source bind-mounts), reports `/healthz`, and proxies
+  same-origin `/api` to the `backend` service
+- **only the frontend port is published**; MySQL, Redis, backend and chatbot
+  have no host port mappings and are reachable only on the internal Compose
+  network (browser traffic goes through the frontend proxy)
+- **the frontend waits for the backend with `service_healthy`** — it starts
+  only once the backend's `/actuator/health` answers HTTP 200 (`UP` *or*
+  `DEGRADED`; SMTP outages deliberately stay healthy — AC4) and is held back
+  when MySQL/Redis are down (503)
+- **the backend runs the `staging` profile** in this layer by default; set
+  `SPRING_PROFILES_ACTIVE=prod` in `.env` for a production host (the base
+  layer alone defaults to `dev`)
+- TLS/HTTPS terminates at the edge (load balancer or host proxy), never
+  inside the containers
+
+```bash
+# Local prod-like run (builds the image from Dockerfile.prod first)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# Staging deploy: use the SHA-tagged image CI pushed to GHCR (no rebuild)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml pull frontend
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+```
+
+The image tag comes from `FRONTEND_IMAGE` (always `sha-<commit>`, never
+`latest` — the same SHA promotes from staging to production). The API origin
+the SPA reads at runtime is written into `/config.json` from
+`RUNTIME_API_BASE_URL` when the container starts, so no rebuild is needed
+per environment.
+
+---
+
+# Staging on EC2 (DDP-#49 / DKR-06)
+
+Staging is an EC2 host running the prod-like Compose stack. Deployments are
+driven by `.github/workflows/deploy.yml` (manual dispatch, explicit image
+SHA); the remote logic lives in `scripts/deploy-staging.sh` (shellcheck
+clean, behaviour covered by a stubbed test harness).
+
+**One-time host bootstrap:**
+
+1. Install Docker Engine + Compose v2; add the deploy user to the `docker`
+   group.
+2. Create `/opt/onecare` (or `vars.STAGING_REMOTE_DIR`) containing
+   `docker-compose.yml`, `docker-compose.prod.yml` and a populated `.env`
+   (start from `.env.example`; use strong unique secrets, never reuse the
+   dev values).
+3. Build the backend and chatbot images once
+   (`docker compose build backend chatbot`); deploys never build on the host.
+4. Optionally terminate TLS at an edge proxy in front of the frontend port
+   (`FRONTEND_BIND=127.0.0.1` when the edge runs on the same host).
+
+**Repository configuration:**
+
+| Name                | Type   | Purpose                                          |
+| ------------------- | ------ | ------------------------------------------------ |
+| `STAGING_HOST`      | secret | EC2 public DNS/IP                                |
+| `STAGING_SSH_KEY`   | secret | Private key for the deploy user                  |
+| `GHCR_PULL_TOKEN`   | secret | `read:packages` token used to pull the frontend image |
+| `STAGING_SSH_USER`  | variable | SSH user (default `ubuntu`)                    |
+| `STAGING_REMOTE_DIR`| variable | Compose dir on the host (default `/opt/onecare`) |
+
+**Deploy / rollback:** Actions → `deploy-staging` → run with the frontend
+commit SHA (`sha-<commit>` tag pushed by the frontend CI). The script
+upserts `FRONTEND_IMAGE` in the host `.env`, pulls only the frontend image,
+recreates that container, and verifies `/healthz`, `/config.json` and the
+`/api` proxy chain. If any check fails it automatically redeploys the
+previous SHA and fails the run; to roll back manually, re-run the workflow
+with the previous SHA.
+
+**Smoke:** after deploying, run the `staging-smoke` workflow in
+`onecare-frontend` with `SMOKE_BASE_URL=https://<staging-host>`.
+
+---
+
 # Environment Variables
 
 The following variables are configured through `.env`:
@@ -717,6 +808,16 @@ The following variables are configured through `.env`:
 | `JWT_SECRET`               | JWT signing secret            |
 | `JWT_ACCESS_TOKEN_EXPIRY`  | Access token expiration       |
 | `JWT_REFRESH_TOKEN_EXPIRY` | Refresh token expiration      |
+| `SPRING_PROFILES_ACTIVE`   | Spring profile (`dev`/`staging`/`prod`); base layer defaults to `dev`, the prod-like layer to `staging` |
+| `BACKUP_ENCRYPTION_KEY`    | **Required** base64 AES-256-GCM key for backups (`openssl rand -base64 32`); compose `:?` gate |
+| `COLUMN_ENCRYPTION_KEY`    | Optional base64 AES-256 key for column encryption (empty = off) |
+| `SMTP_HOST`                | SMTP server host (unreachable ⇒ health `DEGRADED`, never blocks the stack) |
+| `SMTP_PORT`                | SMTP server port              |
+| `SMTP_USERNAME`            | SMTP user (e.g. email address) |
+| `SMTP_PASSWORD`            | SMTP password / app password  |
+| `RUNTIME_API_BASE_URL`     | Prod-like mode: API origin written to the frontend's `/config.json` (default `/api`) |
+| `FRONTEND_IMAGE`           | Prod-like mode: frontend image tag (`sha-<commit>` from GHCR, never `latest`) |
+| `FRONTEND_BIND`            | Prod-like mode: address the frontend port binds to (default `0.0.0.0`; `127.0.0.1` behind a same-host edge proxy) |
 
 Derived inside `docker-compose.yml` (no separate variable needed):
 
@@ -724,7 +825,7 @@ Derived inside `docker-compose.yml` (no separate variable needed):
 | ----------------------------------------- | ------------------------------------------------- |
 | `FRONTEND_ALLOWED_ORIGINS` (backend)      | `http://localhost:FRONTEND_PORT`, `http://127.0.0.1:FRONTEND_PORT` |
 | `PASSWORD_RESET_FRONTEND_BASE_URL`        | `http://localhost:FRONTEND_PORT`                  |
-| `CHATBOT_URL` (backend)                   | `http://chatbot:8000/chat` (compose network)      |
+| `CHATBOT_BASE_URL` (backend)                | `http://chatbot:8000` (compose network)           |
 | `VITE_API_BASE_URL` (frontend)            | `http://localhost:BACKEND_PORT/api`               |
 | `DB_NAME` / `DB_USER` (chatbot)           | `onecare_chatbot` / `chatbot_app` (fixed by the chatbot repo) |
 
@@ -735,9 +836,30 @@ Derived inside `docker-compose.yml` (no separate variable needed):
 * Never commit `.env`.
 * Never commit production secrets.
 * Use `.env.example` to document required variables.
-* Use strong values for `JWT_SECRET`.
+* Use strong values for `JWT_SECRET`, `BACKUP_ENCRYPTION_KEY` and
+  `COLUMN_ENCRYPTION_KEY` (`openssl rand -base64 32`) — no key defaults exist
+  on purpose (AC2/AC3).
 * Local development credentials must not be reused in production.
 * Production deployment should use a proper secrets-management solution.
+
+## Upgrading an existing deployment to DDP-#49
+
+The backend now boots a packaged profile (`SPRING_PROFILES_ACTIVE`, `dev` in
+the base layer, `staging` in the prod-like layer) and healthchecks against
+`/actuator/health`. Before the next `up` on a host whose `.env` predates this
+ticket:
+
+1. Add `BACKUP_ENCRYPTION_KEY` to the host `.env` (`openssl rand -base64 32`)
+   — compose refuses to start without it (`:?` gate).
+2. Add `SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD` (replacing the
+   old `SPRING_MAIL_USERNAME`/`SPRING_MAIL_PASSWORD`) — optional, but the
+   stack is unhealthy-free without them (health reports `DEGRADED`).
+3. Rebuild the backend image once (`docker compose build backend`) after the
+   backend repository contains the DDP-#49 actuator/profile changes — an
+   image without `/actuator/health` fails the healthcheck and (in the
+   prod-like layer) blocks the frontend.
+4. Staging hosts: `scripts/deploy-staging.sh` enforces
+   `SPRING_PROFILES_ACTIVE=staging` in the host `.env` automatically.
 
 ---
 
@@ -877,8 +999,10 @@ Job `compose-validation`:
 1. Validates `docker-compose.yml` against `.env.example`
    (`docker compose --env-file .env.example config --quiet`) — this is the clean-checkout
    state, where no `.env` exists yet, so a documented command must resolve before anything starts.
-2. Fails if a secret is hard-coded in `docker-compose.yml` (values must come from `.env` via `${VAR}`).
-3. Fails if any variable read by `docker-compose.yml` is missing from `.env.example`.
+2. Validates the prod-like layer the same way
+   (`docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.example config --quiet`).
+3. Fails if a secret is hard-coded in either compose file (values must come from `.env` via `${VAR}`).
+4. Fails if any variable read by either compose file is missing from `.env.example`.
 
 ## Chatbot repository — `.github/workflows/ci.yml`
 
@@ -899,4 +1023,3 @@ Job `embedding-smoke` runs the embedding smoke test as a **separate** job (INFRA
 
 > The chatbot Docker image runs `scripts/entrypoint.sh`, which applies migrations and only then
 > starts gunicorn; a migration failure exits non-zero and stops the container (AC3).
-
