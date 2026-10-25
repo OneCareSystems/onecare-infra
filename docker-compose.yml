@@ -82,6 +82,11 @@ services:
     restart: unless-stopped
 
     environment:
+      # DDP-#49 / AC1: the base application.properties is git-ignored (secrets
+      # live only in .env), so a fresh clone must start with a PACKAGED
+      # profile. The prod-like layer overrides this default to staging.
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+
       SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
       SPRING_DATASOURCE_USERNAME: ${DB_USER}
       SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
@@ -92,24 +97,61 @@ services:
       SPRING_SQL_INIT_MODE: always
       SPRING_SQL_INIT_SCHEMA_LOCATIONS: classpath:schema.sql
 
-      JWT_SECRET: ${JWT_SECRET}
+      # Required: compose refuses to start the stack without these, naming the
+      # variable but never its value (AC3). No defaults on purpose.
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (openssl rand -base64 32, see .env.example)}
       JWT_ACCESS_TOKEN_EXPIRY: ${JWT_ACCESS_TOKEN_EXPIRY}
       JWT_REFRESH_TOKEN_EXPIRY: ${JWT_REFRESH_TOKEN_EXPIRY}
+
+      # DDP-31: base64 AES-256-GCM key for backup archives; staging/prod
+      # profiles fail startup without it (AC3). Same :? gate as JWT_SECRET.
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Set BACKUP_ENCRYPTION_KEY in .env (openssl rand -base64 32, see .env.example)}
+      BACKUP_STORAGE_DIR: /app/backups
+      # AES-256 column-encryption key: no consumer yet, the variable flows
+      # through until the encrypting module lands (empty = feature off).
+      COLUMN_ENCRYPTION_KEY: ${COLUMN_ENCRYPTION_KEY:-}
 
       REDIS_HOST: cache
       REDIS_PORT: 6379
 
-      SPRING_MAIL_USERNAME: ${SPRING_MAIL_USERNAME}
-      SPRING_MAIL_PASSWORD: ${SPRING_MAIL_PASSWORD}
+      # DDP-16: SMTP_* reach spring.mail.* through the active profile. An
+      # unreachable gateway must NOT stop the stack - /actuator/health then
+      # reports DEGRADED (HTTP 200, container stays healthy; AC4).
+      SMTP_HOST: ${SMTP_HOST:-localhost}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
 
       PASSWORD_RESET_FRONTEND_BASE_URL: ${PASSWORD_RESET_FRONTEND_BASE_URL}
+      # Every profile reads password-reset.frontend-base-url from FRONTEND_URL.
+      FRONTEND_URL: ${PASSWORD_RESET_FRONTEND_BASE_URL}
 
       FRONTEND_ALLOWED_ORIGINS: ${FRONTEND_ALLOWED_ORIGINS}
-      CHATBOT_URL: http://chatbot:8000/chat
+      # Python chatbot proxy (renamed from chatbot.url by the DDP-39 merge).
+      CHATBOT_BASE_URL: http://chatbot:8000
+      # chatbot.service-token=${CHATBOT_SERVICE_TOKEN} has no default in ANY
+      # profile - the backend needs the same token the chatbot service gates.
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?Set CHATBOT_SERVICE_TOKEN in .env (min 32 chars, see .env.example)}
 
 
     ports:
       - "${BACKEND_PORT}:8080"
+
+    volumes:
+      # DDP-31: backup archives (backup.storage-dir) survive restarts/rebuilds.
+      - backup-data:/app/backups
+
+    # DDP-#49 / DKR-04 AC3: the backend exposes /actuator/health (permitAll).
+    # DEGRADED (e.g. SMTP unreachable) maps to HTTP 200, so the container stays
+    # healthy; MySQL/Redis failures return 503 and mark it unhealthy - only
+    # those two gate the stack (AC4 / SDS 2.5.1). curl ships with temurin.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+
     depends_on:
       db:
         condition: service_healthy
@@ -151,7 +193,7 @@ services:
 
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       DJANGO_DEBUG: "0"
-      ALLOWED_HOSTS: chatbot,backend
+      DJANGO_ALLOWED_HOSTS: chatbot,backend,localhost,127.0.0.1
 
     # Run Django migrations against the dedicated schema before serving
     command: sh -c "python manage.py migrate && gunicorn onecare_chat.wsgi:application --bind 0.0.0.0:8000"
@@ -163,12 +205,16 @@ services:
       - chatbot_storage:/app/storage
 
     healthcheck:
+      # Live route is /internal/health (the old /api/chatbot/health/ URL was
+      # never routed) and it requires the Spring Boot -> Django service token,
+      # so the probe authenticates with the token already in this container's
+      # environment. 401 (wrong token) or unreachable => unhealthy.
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/chatbot/health/', timeout=5)",
+          "import os, urllib.request as u; r = u.Request('http://127.0.0.1:8000/internal/health', headers={'Authorization': 'Bearer ' + os.environ['CHATBOT_SERVICE_TOKEN']}); u.urlopen(r, timeout=5)",
         ]
       interval: 15s
       timeout: 10s
@@ -219,6 +265,10 @@ volumes:
   # FAISS index + uploaded PDFs for the chatbot
   chatbot_storage:
     name: onecare-chatbot-storage
+
+  # DDP-31: backend backup archives (BACKUP_STORAGE_DIR=/app/backups)
+  backup-data:
+    name: onecare-backup-data
 
 
 # ============================================================

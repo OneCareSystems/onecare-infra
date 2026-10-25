@@ -18,27 +18,40 @@ jobs:
       - name: Validate docker-compose.yml against .env.example
         run: docker compose --env-file .env.example config --quiet
 
-      # Test requirement: no secrets in the Compose file.
+      # DDP-#49 / DKR-04: the prod-like layer must resolve with the same
+      # documented variables, otherwise staging deploys fail at `up` time.
+      - name: Validate prod-like compose layer against .env.example
+        run: >
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml
+          --env-file .env.example config --quiet
+
+      # Test requirement: no secrets in the Compose files.
       # Values must come from .env (git-ignored) via ${VAR} interpolation.
-      - name: Reject hard-coded secrets in docker-compose.yml
+      - name: Reject hard-coded secrets in compose files
         run: |
-          if grep -nE '^[[:space:]]+[A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*:[[:space:]]+[^$[:space:]].*' docker-compose.yml; then
-            echo "::error::docker-compose.yml contains a hard-coded secret - move it to .env"
-            exit 1
+          failed=0
+          for f in docker-compose.yml docker-compose.prod.yml; do
+            if grep -nE '^[[:space:]]+[A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*:[[:space:]]+[^$[:space:]].*' "$f"; then
+              echo "::error::$f contains a hard-coded secret - move it to .env"
+              failed=1
+            fi
+          done
+          if [ "$failed" -eq 0 ]; then
+            echo "No hard-coded secrets found in compose files"
           fi
-          echo "No hard-coded secrets found in docker-compose.yml"
+          exit $failed
 
       # TR3: every variable the stack reads must be documented in .env.example,
       # otherwise a clean checkout starts with empty configuration.
-      - name: Every variable used by docker-compose.yml exists in .env.example
+      - name: Every variable used by the compose files exists in .env.example
         run: |
           missing=0
-          for v in $(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*' docker-compose.yml | sed 's/^${//' | sort -u); do
+          while read -r v; do
             if ! grep -qE "^${v}=" .env.example; then
               echo "::error::.env.example is missing ${v}"
               missing=1
             fi
-          done
+          done < <(grep -ohE '\$\{[A-Za-z_][A-Za-z0-9_]*' docker-compose.yml docker-compose.prod.yml | sed 's/^${//' | sort -u)
           if [ "$missing" -eq 0 ]; then
             echo "All compose variables are documented in .env.example"
           fi
