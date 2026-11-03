@@ -1452,6 +1452,25 @@ docker compose down -v
 
 Use the last command carefully because it deletes persistent database data.
 
+## Upgrading an existing deployment to DDP-#49
+
+The backend now boots a packaged profile (`SPRING_PROFILES_ACTIVE`, `dev` in
+the base layer, `staging` in the prod-like layer) and healthchecks against
+`/actuator/health`. Before the next `up` on a host whose `.env` predates this
+ticket:
+
+1. Add `BACKUP_ENCRYPTION_KEY` to the host `.env` (`openssl rand -base64 32`)
+   — compose refuses to start without it (`:?` gate).
+2. Add `SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD` (replacing the
+   old `SPRING_MAIL_USERNAME`/`SPRING_MAIL_PASSWORD`) — optional, but the
+   stack is unhealthy-free without them (health reports `DEGRADED`).
+3. Rebuild the backend image once (`docker compose build backend`) after the
+   backend repository contains the DDP-#49 actuator/profile changes — an
+   image without `/actuator/health` fails the healthcheck and (in the
+   prod-like layer) blocks the frontend.
+4. Staging hosts: `scripts/deploy-staging.sh` enforces
+   `SPRING_PROFILES_ACTIVE=staging` in the host `.env` automatically.
+
 ---
 
 # 20. Troubleshooting
