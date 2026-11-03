@@ -102,8 +102,8 @@ services:
 
       SMTP_HOST: smtp.gmail.com
       SMTP_PORT: 587
-      SMTP_USERNAME: onecaresystems@gmail.com
-      SMTP_PASSWORD: cnvqoroaqsjkgluu
+      SMTP_USERNAME: ${SMTP_USERNAME:?Set SMTP_USERNAME in .env}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?Set SMTP_PASSWORD in .env}
 
       PASSWORD_RESET_FRONTEND_BASE_URL: ${PASSWORD_RESET_FRONTEND_BASE_URL}
       FRONTEND_URL: ${PASSWORD_RESET_FRONTEND_BASE_URL}
