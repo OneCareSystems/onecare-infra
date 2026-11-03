@@ -1,99 +1,128 @@
-
 # OneCare Infrastructure
 
-Infrastructure and local development environment for the **OneCare Clinic Management System**.
+Infrastructure and deployment configuration for the **OneCare Clinic Management System**.
 
-This repository provides a Docker Compose environment that runs the complete OneCare application stack:
+This repository provides a centralized Docker Compose environment for running and deploying the complete OneCare application stack.
 
-* React Frontend
-* Spring Boot Backend
-* MySQL Database
-* Redis Cache
-* Django Chatbot
+The OneCare system consists of five services:
 
-The goal is to allow developers to start the complete local environment without manually installing or configuring MySQL, Redis, or the backend/frontend runtime environments.
+- React Frontend
+- Spring Boot Backend
+- MySQL Database
+- Redis Cache
+- Django Chatbot
+
+The infrastructure repository supports two environments:
+
+1. **Local Development:** Developers can run the complete application using Docker Compose and local application repositories.
+2. **AWS EC2 Deployment:** Application Docker images are manually built, pushed to AWS Elastic Container Registry (ECR), and deployed to an AWS EC2 instance using Docker Compose.
+
+Currently, image building, publishing and EC2 deployment are performed manually. GitHub Actions automation and AWS OIDC integration are planned as future improvements.
 
 ---
 
-## Architecture
+# 1. Architecture
 
-The infrastructure consists of five services:
+## Application Architecture
+
+OneCare uses Docker Compose to manage communication between its five application services.
 
 ```text
-                         OneCare Local Environment
-                                  │
-                         Docker Compose
-                                  │
-              ┌───────────────────┼───────────────────┐
-              │                   │                   │
-              ▼                   ▼                   ▼
-          Frontend             Backend              MySQL
-          React/Vite         Spring Boot              │
-          Port 3000          Port 8080                │
-              │                   │                   │
-              └──────────────┬────┴───────────────────┘
-                             │
-              ┌──────────────┴──────────────┐
-              │                             │
-              ▼                             ▼
-            Redis                       Chatbot
-          Port 6379                     Django
-                                     Port 8000
+                     OneCare Application
+                            |
+                       Docker Compose
+                            |
+              +-------------+-------------+
+              |             |             |
+              v             v             v
+          Frontend       Backend         MySQL
+           React        Spring Boot       8.4
+              |             |
+              |        +----+-----+
+              |        |          |
+              |        v          v
+              |      Redis     Chatbot
+              |       7        Django
+              |                5 + DRF
+              +--------------------+
 ```
 
 ### Services
 
-| Service  | Technology            |   Port | Purpose                     |
-| -------- | --------------------- | -----: | --------------------------- |
-| Frontend | React + Vite          | `3000` | User interface              |
-| Backend  | Spring Boot + Java 21 | `8080` | REST API and business logic |
-| Database | MySQL 8.4             | `3306` | Persistent application data |
-| Cache    | Redis 7               | `6379` | Caching and temporary data  |
-| Chatbot  | Django 5 + DRF        | `8000` | AI chat service             |
+| Service | Technology | Development Port | Purpose |
+|---|---|---:|---|
+| Frontend | React + Vite | `3000` | User interface |
+| Backend | Spring Boot + Java 21 | `8080` | REST API and business logic |
+| Database | MySQL 8.4 | `3306` | Persistent application data |
+| Cache | Redis 7 | `6379` | Caching and temporary data |
+| Chatbot | Django 5 + DRF | `8000` | AI chat service |
+
+In the EC2 deployment, only the frontend is publicly exposed. Backend, chatbot, MySQL and Redis communicate through the internal Docker network.
 
 ---
 
-## Repository Structure
+# 2. Repository Structure
 
-The OneCare project uses separate repositories for the frontend, backend, chatbot, and infrastructure.
+The OneCare project consists of four separate Git repositories.
 
-The repositories should be cloned into the same parent directory:
+All repositories should be cloned into the same parent directory for local development.
 
 ```text
 OneCare/
+│
+├── onecare-frontend/
+│   ├── Dockerfile
+│   ├── Dockerfile.prod
+│   ├── package.json
+│   └── src/
+│
 ├── onecare-backend/
 │   ├── Dockerfile
 │   ├── pom.xml
 │   └── src/
+│
 ├── onecare-chatbot/
 │   ├── Dockerfile
 │   ├── manage.py
 │   ├── requirements.txt
 │   └── onecare_chat/
 │
-├── onecare-frontend/
-│   ├── Dockerfile
-│   ├── package.json
-│   └── src/
-│
 └── onecare-infra/
+    ├── .github/
+    │   └── workflows/
+    │       └── ci.yml
+    │
+    ├── scripts/
+    │
     ├── docker-compose.yml
+    ├── docker-compose.prod.yml
+    ├── docker-compose.ec2ecr.yml
+    │
     ├── .env.example
     ├── .gitignore
     └── README.md
 ```
 
-The Docker Compose file uses the backend, chatbot, and frontend repositories as local Docker build contexts.
+### Repository Responsibilities
+
+| Repository | Responsibility |
+|---|---|
+| `onecare-frontend` | React frontend development and Docker image building |
+| `onecare-backend` | Spring Boot backend development and Docker image building |
+| `onecare-chatbot` | Django chatbot development and Docker image building |
+| `onecare-infra` | Local Docker Compose, AWS deployment configuration and infrastructure management |
+
+The infrastructure repository centralizes deployment configuration for the complete application.
 
 ---
 
-# Prerequisites
+# 3. Prerequisites
 
-Install the following software before starting:
+Install the following software before starting local development:
 
-* Git
-* Docker Desktop
-* Docker Compose
+- Git
+- Docker Desktop
+- Docker Compose V2
 
 Docker Compose is included with current versions of Docker Desktop.
 
@@ -107,48 +136,57 @@ docker --version
 docker compose version
 ```
 
+For AWS deployment, the following are also required:
+
+- AWS Account
+- AWS CLI
+- AWS Elastic Container Registry (ECR)
+- AWS Elastic Compute Cloud (EC2)
+- AWS IAM
+- Docker Engine
+- Docker Compose V2
+
 ---
 
-# Getting Started
+# 4. Local Development Environment
 
-## 1. Clone the repositories
+The local development environment builds application images directly from their respective repositories.
 
-Clone the four repositories into the same parent directory.
+## 4.1 Clone the Repositories
 
-Example:
+Clone all four repositories into the same parent directory.
 
 ```bash
-git clone https://github.com/OneCareSystems/onecare-backend
-git clone https://github.com/OneCareSystems/onecare-chatbot
-git clone https://github.com/OneCareSystems/onecare-frontend
-git clone https://github.com/OneCareSystems/onecare-infra
+git clone https://github.com/OneCareSystems/onecare-frontend.git
+
+git clone https://github.com/OneCareSystems/onecare-backend.git
+
+git clone https://github.com/OneCareSystems/onecare-chatbot.git
+
+git clone https://github.com/OneCareSystems/onecare-infra.git
 ```
 
 The resulting structure should be:
 
 ```text
 OneCare/
+├── onecare-frontend/
 ├── onecare-backend/
 ├── onecare-chatbot/
-├── onecare-frontend/
 └── onecare-infra/
 ```
 
-> **Important:** Do not place the repositories inside each other. The repositories must be sibling directories.
+**Important:** Do not place the repositories inside each other. They must be sibling directories.
 
----
-
-## 2. Navigate to the infrastructure repository
+## 4.2 Navigate to the Infrastructure Repository
 
 ```bash
 cd onecare-infra
 ```
 
----
+## 4.3 Create the Environment File
 
-## 3. Create the environment file
-
-Copy the example environment file:
+Copy the example environment file.
 
 ### Windows PowerShell
 
@@ -162,7 +200,7 @@ Copy-Item .env.example .env
 cp .env.example .env
 ```
 
-Open `.env` and update the required values.
+Update the required environment variables.
 
 Example:
 
@@ -175,62 +213,67 @@ DB_PASSWORD=change_me
 DB_ROOT_PASSWORD=change_root_password
 
 BACKEND_PORT=8080
-
 FRONTEND_PORT=3000
-
 CHATBOT_PORT=8000
-# dedicated chatbot database; must match 01_schemas_and_users.sql (dev/CI only)
+
 CHATBOT_DB_PASSWORD=chatbot_dev_pw
-# Spring Boot -> Django token, at least 32 characters
-CHATBOT_SERVICE_TOKEN=<python -c "import secrets;print(secrets.token_urlsafe(48))">
+
+CHATBOT_SERVICE_TOKEN=replace_with_secure_token
 
 REDIS_HOST=cache
 REDIS_PORT=6379
 
-JWT_SECRET=change_this_to_a_secure_secret
+JWT_SECRET=replace_with_secure_secret
+
 JWT_ACCESS_TOKEN_EXPIRY=1800000
 JWT_REFRESH_TOKEN_EXPIRY=604800000
 ```
 
+Additional application-specific variables may be required depending on the backend and chatbot configuration.
+
 ### Security
 
-Do **not** commit `.env` to Git.
+Never commit `.env` to Git.
 
 The `.gitignore` file should contain:
 
 ```gitignore
 .env
+.env.ec2ecr
 ```
 
-Only `.env.example` should be committed.
+Only example configuration files should be committed.
 
 ---
 
-# Start the Complete Environment
+# 5. Start the Local Environment
 
-From the `onecare-infra` directory:
+From the `onecare-infra` directory, execute:
 
 ```bash
 docker compose up --build
 ```
 
-This command will:
+Docker Compose will:
 
 1. Build the backend Docker image.
 2. Build the chatbot Docker image.
 3. Build the frontend Docker image.
-4. Pull the MySQL image if it is not available locally.
-5. Pull the Redis image if it is not available locally.
+4. Pull the MySQL image if unavailable locally.
+5. Pull the Redis image if unavailable locally.
 6. Create the Docker network.
 7. Create the MySQL persistent volume.
 8. Start MySQL.
 9. Wait for MySQL to become healthy.
 10. Start Redis.
 11. Start the Spring Boot backend.
-12. Start the Django chatbot (waits for MySQL to be healthy, runs migrations, then starts gunicorn).
-13. Start the React frontend.
+12. Start the Django chatbot after its database dependencies are ready.
+13. Run chatbot database migrations.
+14. Start the frontend after its required dependencies become healthy.
 
-You do **not** need to manually run:
+Docker Compose manages the complete application environment.
+
+Developers do not need to manually execute:
 
 ```bash
 mvn spring-boot:run
@@ -242,27 +285,15 @@ or:
 npm run dev
 ```
 
-or manually start MySQL/Redis.
+or manually start MySQL and Redis.
 
-Docker Compose manages the complete local environment.
-
----
-
-# Run in Background
-
-To start all services in detached mode:
+## 5.1 Run in Background
 
 ```bash
 docker compose up --build -d
 ```
 
-You can then continue using the terminal.
-
----
-
-# Check Running Services
-
-Run:
+## 5.2 Check Running Services
 
 ```bash
 docker compose ps
@@ -278,101 +309,79 @@ onecare-db
 onecare-cache
 ```
 
-The backend and infrastructure services should report healthy when their health checks pass.
+## 5.3 Access the Application
 
----
-
-# Access the Application
-
-Once all services are running:
-
-### Frontend
+Frontend:
 
 ```text
 http://localhost:3000
 ```
 
-### Backend
+Backend:
 
 ```text
 http://localhost:8080
 ```
 
-### Backend Health Check
+Backend health:
 
 ```text
 http://localhost:8080/actuator/health
 ```
 
-Returns HTTP 200 with `"status":"UP"`, or `"status":"DEGRADED"` when an
-optional integration (currently SMTP) is unreachable — both keep the
-container **healthy**. Only MySQL/Redis failures return HTTP 503 and mark
-the container unhealthy (AC4).
-
-### MySQL
-
-```text
-localhost:3306
-```
-
-### Redis
-
-```text
-localhost:6379
-```
-
-### Chatbot
+Chatbot:
 
 ```text
 http://localhost:8000
 ```
 
-The chatbot publishes only on `127.0.0.1` (localhost). Health check:
+Chatbot health:
 
 ```text
 http://localhost:8000/api/chatbot/health/
 ```
 
-The chatbot uses its **own** schema `onecare_chatbot` (user `chatbot_app`), never the main
-`onecare` database. Both are created by
-`../onecare-chatbot/docker/mysql/init/01_schemas_and_users.sql` on the **first** start of a
-fresh MySQL volume. If you had already been running the stack before this file was mounted,
-run once:
+MySQL:
 
-```bash
-docker compose down -v
-docker compose up --build
+```text
+localhost:3306
 ```
 
-> MySQL and Redis are infrastructure services and are normally accessed by the backend rather than directly through a browser.
+Redis:
+
+```text
+localhost:6379
+```
+
+MySQL and Redis are infrastructure services and are normally accessed by the backend rather than directly through a browser.
 
 ---
 
-# Service Communication
+# 6. Service Communication
 
-Inside the Docker network, containers should communicate using **service names**, not `localhost`.
+Docker Compose provides internal DNS resolution using service names.
 
-For example:
+Containers should communicate using Docker service names rather than `localhost`.
+
+### Backend to MySQL
 
 ```text
-Backend → MySQL
-
 jdbc:mysql://db:3306/onecare
 ```
 
-Backend → Redis:
+### Backend to Redis
 
 ```text
 cache:6379
 ```
 
-Backend → Chatbot:
+### Backend to Chatbot
 
 ```text
 http://chatbot:8000
 ```
 
-Do **not** use:
+Do not use:
 
 ```text
 localhost:3306
@@ -386,21 +395,21 @@ localhost:6379
 
 from inside the backend container.
 
-`localhost` inside a container refers to that same container.
+Inside a Docker container, `localhost` refers to that same container.
 
-Docker Compose provides DNS resolution using service names:
+The Compose service names are:
 
 ```text
+frontend
+backend
 db
 cache
-backend
 chatbot
-frontend
 ```
 
 ---
 
-# Database Persistence
+# 7. Database Persistence
 
 MySQL uses a named Docker volume:
 
@@ -408,128 +417,992 @@ MySQL uses a named Docker volume:
 onecare-mysql-data
 ```
 
-This means database data persists even when containers are removed.
+Database data persists even when containers are removed.
 
-For example:
-
-```bash
-docker compose down
-```
-
-followed by:
-
-```bash
-docker compose up
-```
-
-will not delete the MySQL data.
-
----
-
-# Stop the Environment
-
-To stop the running containers:
+To stop the environment:
 
 ```bash
 docker compose down
 ```
 
-This stops and removes the containers and network while preserving the MySQL named volume.
+The database volume remains intact.
 
----
-
-# Remove Database Data
-
-⚠️ **Warning:** This permanently removes the local MySQL data stored in the Docker volume.
+To remove all containers and database data:
 
 ```bash
 docker compose down -v
 ```
 
-Use this only when you intentionally want a fresh database.
+**Warning:** This permanently deletes the MySQL data stored in the volume.
+
+Use this command only when a fresh database initialization is intentionally required.
+
+### Chatbot Database
+
+The chatbot uses its own database schema:
+
+```text
+Database: onecare_chatbot
+User: chatbot_app
+```
+
+It does not use the main application database for its dedicated Django data.
+
+Both schemas and their database users are created through:
+
+```text
+docker/mysql/init/01_schemas_and_users.sql
+```
+
+These initialization scripts execute only when MySQL initializes a new data volume.
+
+An existing database volume must already contain the required chatbot schema and account.
 
 ---
 
-# View Logs
+# 8. Docker Compose Configuration
 
-View logs for all services:
+OneCare uses separate Docker Compose configurations for different environments.
 
-```bash
-docker compose logs
+| File | Purpose |
+|---|---|
+| `docker-compose.yml` | Local development |
+| `docker-compose.prod.yml` | Production-like local testing |
+| `docker-compose.ec2ecr.yml` | AWS EC2 deployment using ECR images |
+
+## 8.1 Local Development Compose
+
+The base Compose file builds application images from local repositories.
+
+Example:
+
+```yaml
+backend:
+  build:
+    context: ../onecare-backend
+
+frontend:
+  build:
+    context: ../onecare-frontend
+
+chatbot:
+  build:
+    context: ../onecare-chatbot
 ```
 
-Follow logs:
+Developers can rebuild application images whenever source code changes.
+
+## 8.2 Production-like Compose
+
+The production-like Compose configuration provides:
+
+- Frontend served using unprivileged Nginx.
+- No frontend development source bind mounts.
+- Same-origin API proxying.
+- Internal backend, chatbot, MySQL and Redis communication.
+- Backend health checks.
+- Frontend startup after backend health checks succeed.
+- Runtime frontend configuration through `/config.json`.
+
+Run the production-like environment locally:
 
 ```bash
-docker compose logs -f
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  build
 ```
 
-View backend logs only:
+Start:
 
 ```bash
-docker compose logs -f backend
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  up -d
 ```
 
-View frontend logs:
+The backend uses the `staging` profile by default in this configuration.
 
-```bash
-docker compose logs -f frontend
+For a production host, configure:
+
+```env
+SPRING_PROFILES_ACTIVE=prod
 ```
 
-View MySQL logs:
+TLS/HTTPS should terminate at an edge proxy or load balancer rather than inside the application containers.
 
-```bash
-docker compose logs -f db
+---
+
+# 9. AWS ECR and EC2 Deployment Architecture
+
+OneCare uses AWS Elastic Container Registry (ECR) to store the Docker images of its three application services.
+
+The three application images are:
+
+1. Frontend
+2. Backend
+3. Chatbot
+
+Currently, these images are manually built and pushed to their respective ECR repositories.
+
+The EC2 instance pulls the published images and runs the complete application using Docker Compose.
+
+## 9.1 AWS Region
+
+OneCare currently uses:
+
+```text
+ap-southeast-2
 ```
 
-View Redis logs:
+Region:
 
-```bash
-docker compose logs -f cache
+```text
+Asia Pacific (Sydney)
 ```
 
-View chatbot logs:
+All three application ECR repositories should be maintained in this region.
+
+## 9.2 ECR Repositories
+
+OneCare uses three separate ECR repositories.
+
+| Application | ECR Repository |
+|---|---|
+| Frontend | `onecare-frontend` |
+| Backend | `onecare-backend` |
+| Chatbot | `onecare-chatbot` |
+
+Repository URI format:
+
+```text
+AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/onecare-frontend
+
+AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/onecare-backend
+
+AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/onecare-chatbot
+```
+
+Recommended repository settings:
+
+- Image tag mutability: Immutable
+- Image scanning: Enabled
+- Encryption: Enabled
+- Lifecycle policy: Retain recent deployment images and remove obsolete images according to an approved retention policy.
+
+The existing `onecare-backend` ECR repository should be retained.
+
+## 9.3 Current Deployment Architecture
+
+```text
+       FRONTEND REPOSITORY
+       BACKEND REPOSITORY
+       CHATBOT REPOSITORY
+                |
+                v
+       Manually Build Docker Images
+                |
+                v
+       Manually Push Images to ECR
+                |
+                v
+          AWS ECR Registry
+                |
+                v
+          AWS EC2 Instance
+                |
+          Manual EC2 Connection
+                |
+                v
+        Manually Execute Docker Compose
+                |
+       +--------+--------+
+       |        |        |
+       v        v        v
+    Frontend Backend  Chatbot
+                |
+           +----+----+
+           |         |
+           v         v
+         MySQL     Redis
+```
+
+### Current Deployment Responsibilities
+
+| Component | Current Approach |
+|---|---|
+| Frontend image building | Manual |
+| Backend image building | Manual |
+| Chatbot image building | Manual |
+| Image publishing | Manual push to ECR |
+| Container registry | AWS ECR |
+| EC2 deployment | Manual |
+| Container orchestration | Docker Compose |
+| Image updates | Manual pull and container recreation |
+| GitHub OIDC | Not implemented |
+| Automated EC2 deployment | Not implemented |
+
+## 9.4 Docker Image Tagging
+
+Use Git commit SHA-based image tags.
+
+Example:
+
+```text
+onecare-frontend:sha-a123456
+
+onecare-backend:sha-b123456
+
+onecare-chatbot:sha-c123456
+```
+
+Avoid using `latest` for deployment.
+
+Immutable SHA tags provide:
+
+- Version traceability.
+- Reproducible deployments.
+- Easier rollback.
+- Identification of deployed application versions.
+
+Each repository has its own commit SHA because the three application repositories are independent.
+
+---
+
+# 10. Manual Docker Image Publishing
+
+Currently, application Docker images are built and pushed to AWS ECR manually.
+
+Each application has its own ECR repository.
+
+## 10.1 AWS Authentication
+
+Authenticate using your currently configured AWS authentication method.
+
+Verify AWS CLI access:
 
 ```bash
-docker compose logs -f chatbot
+aws sts get-caller-identity
+```
+
+Verify the region:
+
+```bash
+aws configure get region
+```
+
+The required region is:
+
+```text
+ap-southeast-2
+```
+
+## 10.2 Authenticate Docker with ECR
+
+Execute:
+
+```bash
+aws ecr get-login-password \
+  --region ap-southeast-2 \
+  | docker login \
+      --username AWS \
+      --password-stdin AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com
+```
+
+Replace `AWS_ACCOUNT_ID` with your AWS account ID.
+
+## 10.3 Build and Push Frontend Image
+
+Navigate to the frontend repository:
+
+```bash
+cd onecare-frontend
+```
+
+Build the production image:
+
+```bash
+docker build \
+  -f Dockerfile.prod \
+  -t onecare-frontend:sha-a123456 .
+```
+
+Tag the image for ECR:
+
+```bash
+docker tag \
+  onecare-frontend:sha-a123456 \
+  AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/onecare-frontend:sha-a123456
+```
+
+Push:
+
+```bash
+docker push \
+  AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/onecare-frontend:sha-a123456
+```
+
+Use the appropriate Dockerfile and build arguments required by the actual frontend production configuration.
+
+## 10.4 Build and Push Backend Image
+
+Navigate to the backend repository:
+
+```bash
+cd ../onecare-backend
+```
+
+Build:
+
+```bash
+docker build \
+  -t onecare-backend:sha-b123456 .
+```
+
+Tag:
+
+```bash
+docker tag \
+  onecare-backend:sha-b123456 \
+  AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/onecare-backend:sha-b123456
+```
+
+Push:
+
+```bash
+docker push \
+  AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/onecare-backend:sha-b123456
+```
+
+## 10.5 Build and Push Chatbot Image
+
+Navigate to the chatbot repository:
+
+```bash
+cd ../onecare-chatbot
+```
+
+Build:
+
+```bash
+docker build \
+  -t onecare-chatbot:sha-c123456 .
+```
+
+Tag:
+
+```bash
+docker tag \
+  onecare-chatbot:sha-c123456 \
+  AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/onecare-chatbot:sha-c123456
+```
+
+Push:
+
+```bash
+docker push \
+  AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com/onecare-chatbot:sha-c123456
+```
+
+Replace the example SHA values with the actual commit identifiers of the respective repositories.
+
+### Verify Published Images
+
+Run:
+
+```bash
+aws ecr describe-images \
+  --repository-name onecare-frontend \
+  --region ap-southeast-2
+```
+
+```bash
+aws ecr describe-images \
+  --repository-name onecare-backend \
+  --region ap-southeast-2
+```
+
+```bash
+aws ecr describe-images \
+  --repository-name onecare-chatbot \
+  --region ap-southeast-2
+```
+
+All three images should appear in their respective repositories before deployment.
+
+---
+
+# 11. EC2 Deployment Configuration
+
+The AWS EC2 instance acts as the application deployment server.
+
+It pulls prebuilt images from ECR and manages containers through Docker Compose.
+
+It does not need to build application images.
+
+## 11.1 EC2 Instance
+
+Current staging configuration:
+
+| Configuration | Value |
+|---|---|
+| Instance Name | `onecare-staging` |
+| Region | `ap-southeast-2` |
+| Operating System | Ubuntu |
+| Instance Type | `c7i-flex.large` |
+| Deployment Method | Docker Compose |
+| Container Registry | AWS ECR |
+
+## 11.2 Install Required Software
+
+Install:
+
+- Docker Engine
+- Docker Compose V2
+- AWS CLI
+
+Verify:
+
+```bash
+docker --version
+```
+
+```bash
+docker compose version
+```
+
+```bash
+aws --version
+```
+
+## 11.3 Create Deployment Directory
+
+Create:
+
+```bash
+sudo mkdir -p /opt/onecare
+```
+
+The directory structure should be:
+
+```text
+/opt/onecare/
+│
+├── docker-compose.ec2ecr.yml
+│
+├── .env.ec2ecr
+│
+└── docker/
+    └── mysql/
+        └── init/
+            └── 01_schemas_and_users.sql
+```
+
+The Compose file and database initialization scripts are provided by the infrastructure repository.
+
+The production environment file is created directly on EC2 and must not be committed to Git.
+
+## 11.4 EC2 Authentication with AWS ECR
+
+Use the AWS authentication method currently configured on your EC2 instance.
+
+If an EC2 IAM instance role is attached, it should have read-only access to the three ECR repositories.
+
+Required ECR permissions include:
+
+```text
+ecr:GetAuthorizationToken
+ecr:BatchCheckLayerAvailability
+ecr:GetDownloadUrlForLayer
+ecr:BatchGetImage
+```
+
+Verify AWS identity:
+
+```bash
+aws sts get-caller-identity
+```
+
+Authenticate Docker:
+
+```bash
+aws ecr get-login-password \
+  --region ap-southeast-2 \
+  | docker login \
+      --username AWS \
+      --password-stdin AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com
 ```
 
 ---
 
-# Rebuild a Service
+# 12. EC2 Environment Configuration
 
-If you modify the backend:
+Create the following file on EC2:
 
-```bash
-docker compose build backend
-docker compose up backend
+```text
+/opt/onecare/.env.ec2ecr
 ```
 
-If you modify the frontend:
+Example:
 
-```bash
-docker compose build frontend
-docker compose up frontend
+```env
+AWS_ACCOUNT_ID=YOUR_AWS_ACCOUNT_ID
+AWS_REGION=ap-southeast-2
+
+FRONTEND_IMAGE_TAG=sha-a123456
+BACKEND_IMAGE_TAG=sha-b123456
+CHATBOT_IMAGE_TAG=sha-c123456
+
+MYSQL_DATABASE=onecare
+MYSQL_USER=onecare
+MYSQL_PASSWORD=YOUR_SECURE_PASSWORD
+MYSQL_ROOT_PASSWORD=YOUR_SECURE_ROOT_PASSWORD
+
+CHATBOT_DB_USER=chatbot_app
+CHATBOT_DB_PASSWORD=YOUR_SECURE_CHATBOT_DB_PASSWORD
+
+JWT_SECRET=YOUR_SECURE_JWT_SECRET
+
+DJANGO_SECRET_KEY=YOUR_SECURE_DJANGO_SECRET
+
+CHATBOT_SERVICE_TOKEN=YOUR_SECURE_SERVICE_TOKEN
+
+BACKUP_ENCRYPTION_KEY=YOUR_BACKUP_ENCRYPTION_KEY
+
+COLUMN_ENCRYPTION_KEY=
+
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+
+LLM_API_KEY=
+GROQ_API_KEY=
+
+SPRING_PROFILES_ACTIVE=staging
 ```
 
-If you modify the chatbot:
+Retain all other required application-specific environment variables from the existing EC2 deployment configuration.
 
-```bash
-docker compose build chatbot
-docker compose up chatbot
+The variable names must match the references in the actual Compose configuration and application settings.
+
+### Security Requirements
+
+- Use strong, unique production secrets.
+- Do not reuse local development credentials.
+- Never commit `.env.ec2ecr`.
+- Restrict file access on EC2.
+- Do not expose database or cache ports publicly.
+- Use a secure secrets-management solution for future production improvements.
+
+---
+
+# 13. EC2 Docker Compose Deployment
+
+The file:
+
+```text
+docker-compose.ec2ecr.yml
 ```
 
-To rebuild everything:
+is responsible for deploying the three prebuilt application images from ECR.
+
+Unlike the local development Compose file, it must not contain application source build contexts.
+
+## 13.1 Application Image Configuration
+
+Frontend:
+
+```yaml
+frontend:
+  image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/onecare-frontend:${FRONTEND_IMAGE_TAG}
+```
+
+Backend:
+
+```yaml
+backend:
+  image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/onecare-backend:${BACKEND_IMAGE_TAG}
+```
+
+Chatbot:
+
+```yaml
+chatbot:
+  image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/onecare-chatbot:${CHATBOT_IMAGE_TAG}
+```
+
+The actual Compose file must preserve:
+
+- Existing application environment variables.
+- MySQL database configuration.
+- Redis configuration.
+- Backend health checks.
+- Chatbot health checks.
+- Chatbot migration startup.
+- Persistent database volumes.
+- Internal Docker networking.
+- Service startup dependencies.
+- Frontend runtime configuration.
+
+## 13.2 Network and Port Exposure
+
+For EC2 deployment:
+
+| Service | Container Port | Public Access |
+|---|---:|---|
+| Frontend | 8080 | Yes, through port 80 |
+| Backend | 8080 | No |
+| Chatbot | 8000 | No |
+| MySQL | 3306 | No |
+| Redis | 6379 | No |
+
+The frontend acts as the public entry point and proxies API requests to the backend.
+
+The backend communicates with the chatbot through the internal Docker network.
+
+MySQL and Redis remain private.
+
+---
+
+# 14. Manual EC2 Deployment Process
+
+Currently, deployments are initiated manually by connecting to the EC2 instance.
+
+After all three images have been successfully published to ECR, connect to EC2 using SSH.
+
+Navigate to the deployment directory:
 
 ```bash
-docker compose up --build
+cd /opt/onecare
+```
+
+## 14.1 Authenticate with ECR
+
+```bash
+aws ecr get-login-password \
+  --region ap-southeast-2 \
+  | docker login \
+      --username AWS \
+      --password-stdin AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com
+```
+
+## 14.2 Update Image Tags
+
+Edit:
+
+```text
+.env.ec2ecr
+```
+
+Update the image tags:
+
+```env
+FRONTEND_IMAGE_TAG=sha-a123456
+BACKEND_IMAGE_TAG=sha-b123456
+CHATBOT_IMAGE_TAG=sha-c123456
+```
+
+Use the actual tags that were pushed to ECR.
+
+## 14.3 Pull Application Images
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  pull
+```
+
+This downloads the specified frontend, backend and chatbot images.
+
+## 14.4 Start the Application
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  up -d --no-build
+```
+
+Docker Compose starts or recreates the containers using the selected ECR images.
+
+The `--no-build` option ensures EC2 does not attempt to build application images locally.
+
+## 14.5 Verify Running Services
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  ps
+```
+
+## 14.6 View Logs
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  logs -f
+```
+
+Backend logs:
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  logs -f backend
+```
+
+Frontend logs:
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  logs -f frontend
+```
+
+Chatbot logs:
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  logs -f chatbot
 ```
 
 ---
 
-# Useful Docker Commands
+# 15. Deployment and Rollback Strategy
 
-### List containers
+OneCare uses immutable SHA-based image tags.
+
+Each deployment should record the versions currently running.
+
+Example:
+
+```text
+Current Deployment:
+
+Frontend: sha-a123456
+Backend:  sha-b123456
+Chatbot:  sha-c123456
+```
+
+A new deployment might use:
+
+```text
+New Deployment:
+
+Frontend: sha-a456789
+Backend:  sha-b456789
+Chatbot:  sha-c456789
+```
+
+If the new deployment fails, restore the previous image tags in `.env.ec2ecr`.
+
+Then execute:
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  pull
+```
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  up -d --no-build
+```
+
+This restores the previous application image versions.
+
+**Important:** Application image rollback does not automatically reverse database schema changes. Database backups and backward-compatible migration practices must be maintained.
+
+---
+
+# 16. Future CI/CD Automation
+
+Automating Docker image publishing and EC2 deployment through GitHub Actions is planned as a future infrastructure improvement.
+
+The current manual deployment process will remain in place until the AWS configuration and authentication requirements are resolved.
+
+## 16.1 Planned GitHub Actions Architecture
+
+```text
+       FRONTEND REPOSITORY
+       BACKEND REPOSITORY
+       CHATBOT REPOSITORY
+                |
+                v
+          GitHub Actions
+                |
+          CI Quality Checks
+                |
+                v
+         Build Docker Images
+                |
+                v
+         AWS OIDC Authentication
+                |
+                v
+          Push Images to ECR
+                |
+                v
+            AWS ECR
+                |
+                v
+         onecare-infra
+                |
+                v
+       Automated EC2 Deployment
+                |
+                v
+          Docker Compose
+```
+
+## 16.2 Planned GitHub OIDC Integration
+
+GitHub Actions will eventually authenticate with AWS using OpenID Connect (OIDC).
+
+The planned configuration includes:
+
+1. Create a GitHub Actions OIDC identity provider in AWS IAM.
+2. Create an IAM role for GitHub Actions.
+3. Configure the IAM trust policy for the authorized OneCare repositories.
+4. Grant the required ECR publishing permissions.
+5. Configure the role ARN in GitHub repository variables.
+6. Update the application CI workflows to authenticate through OIDC.
+
+GitHub OIDC is currently **not implemented** because of an outstanding AWS account configuration issue.
+
+Until the issue is resolved, image building and publishing will continue manually.
+
+## 16.3 Planned Image Publishing Workflow
+
+Each application repository will maintain its own CI/CD workflow.
+
+| Repository | Planned Responsibility |
+|---|---|
+| `onecare-frontend` | Build, test, scan and publish frontend image |
+| `onecare-backend` | Build, test, scan and publish backend image |
+| `onecare-chatbot` | Build, test, scan and publish chatbot image |
+
+Planned branch strategy:
+
+| GitHub Event | CI Checks | Docker Build | ECR Publishing |
+|---|---|---|---|
+| Pull request to `develop` | Yes | Yes | No |
+| Merge/push to `develop` | Yes | Yes | Yes |
+| Pull request to `main` | Yes | Yes | No |
+| Merge/push to `main` | Yes | Yes | Yes |
+
+The default branch for all application repositories is currently `develop`.
+
+## 16.4 Planned Automated EC2 Deployment
+
+After ECR image publishing is automated, the infrastructure repository will introduce:
+
+```text
+.github/workflows/deploy.yml
+```
+
+The planned deployment workflow will:
+
+1. Accept the three application image SHA tags.
+2. Validate the image versions.
+3. Connect to EC2.
+4. Update the image tags in the EC2 environment file.
+5. Pull images from ECR.
+6. Execute Docker Compose.
+7. Verify application health.
+8. Restore previous image versions if deployment fails.
+
+Initially, deployment will remain manually triggered through GitHub Actions, even after image publishing automation is introduced.
+
+Automatic deployment after every image push can be considered as a later improvement.
+
+---
+
+# 17. Deployment Implementation Roadmap
+
+The OneCare deployment implementation is divided into three phases.
+
+| Phase | Task | Status |
+|---|---|---|
+| Phase 1 | Manually build three application images | Current |
+| Phase 1 | Manually push images to AWS ECR | Current |
+| Phase 1 | Manually deploy images to EC2 using Docker Compose | Current |
+| Phase 2 | Resolve AWS account configuration issue | Pending |
+| Phase 2 | Configure GitHub OIDC | Pending |
+| Phase 2 | Automate frontend ECR publishing | Planned |
+| Phase 2 | Automate backend ECR publishing | Planned |
+| Phase 2 | Automate chatbot ECR publishing | Planned |
+| Phase 3 | Create infrastructure deployment workflow | Planned |
+| Phase 3 | Automate EC2 deployment through GitHub Actions | Planned |
+| Phase 3 | Implement automated deployment verification and rollback | Planned |
+
+This phased approach allows OneCare to deploy and test the application before completing the full CI/CD implementation.
+
+---
+
+# 18. Environment Variables
+
+The following table describes the primary environment variables used by the infrastructure.
+
+| Variable | Description |
+|---|---|
+| `DB_HOST` | MySQL service hostname |
+| `DB_PORT` | MySQL port |
+| `DB_NAME` | Main application database |
+| `DB_USER` | Main database username |
+| `DB_PASSWORD` | Main database password |
+| `DB_ROOT_PASSWORD` | MySQL root password |
+| `MYSQL_DATABASE` | MySQL initialization database |
+| `MYSQL_USER` | MySQL application user |
+| `MYSQL_PASSWORD` | MySQL application password |
+| `MYSQL_ROOT_PASSWORD` | MySQL root password |
+| `BACKEND_PORT` | Backend host port |
+| `FRONTEND_PORT` | Frontend host port |
+| `CHATBOT_PORT` | Chatbot host port |
+| `CHATBOT_DB_USER` | Dedicated chatbot database user |
+| `CHATBOT_DB_PASSWORD` | Dedicated chatbot database password |
+| `CHATBOT_SERVICE_TOKEN` | Spring Boot to Django authentication token |
+| `DJANGO_SECRET_KEY` | Django signing secret |
+| `REDIS_HOST` | Redis service hostname |
+| `REDIS_PORT` | Redis port |
+| `JWT_SECRET` | JWT signing secret |
+| `JWT_ACCESS_TOKEN_EXPIRY` | Access token expiry |
+| `JWT_REFRESH_TOKEN_EXPIRY` | Refresh token expiry |
+| `SPRING_PROFILES_ACTIVE` | Active Spring profile |
+| `BACKUP_ENCRYPTION_KEY` | AES-256-GCM backup encryption key |
+| `COLUMN_ENCRYPTION_KEY` | Optional column encryption key |
+| `SMTP_HOST` | SMTP server |
+| `SMTP_PORT` | SMTP server port |
+| `SMTP_USERNAME` | SMTP account username |
+| `SMTP_PASSWORD` | SMTP account password |
+| `RUNTIME_API_BASE_URL` | Frontend runtime API base URL |
+| `AWS_ACCOUNT_ID` | AWS account ID |
+| `AWS_REGION` | AWS region |
+| `FRONTEND_IMAGE_TAG` | Frontend ECR image tag |
+| `BACKEND_IMAGE_TAG` | Backend ECR image tag |
+| `CHATBOT_IMAGE_TAG` | Chatbot ECR image tag |
+| `LLM_API_KEY` | LLM provider API key |
+| `GROQ_API_KEY` | Groq API key |
+
+The exact variables required depend on the Compose configuration and application settings.
+
+---
+
+# 19. Useful Docker Commands
+
+### List running containers
 
 ```bash
 docker ps
@@ -553,46 +1426,58 @@ docker images
 docker compose config
 ```
 
+### View all logs
+
+```bash
+docker compose logs
+```
+
+### Follow all logs
+
+```bash
+docker compose logs -f
+```
+
 ### Stop the environment
 
 ```bash
 docker compose down
 ```
 
-### Stop and remove volumes
+### Remove containers and volumes
 
 ```bash
 docker compose down -v
 ```
 
+Use the last command carefully because it deletes persistent database data.
+
 ---
 
-# Troubleshooting
+# 20. Troubleshooting
 
-## Port already in use
+## Port Already in Use
 
-If port `3000` or `8080` is already being used, update the corresponding value in `.env`.
+If port `3000` or `8080` is already being used, update the corresponding environment variable.
 
-For example:
+Example:
 
 ```env
 FRONTEND_PORT=3001
 BACKEND_PORT=8081
 ```
 
-The container ports remain unchanged.
+The internal container ports remain unchanged.
 
----
+## Backend Cannot Connect to MySQL
 
-## Backend cannot connect to MySQL
-
-Check the service status:
+Check service status:
 
 ```bash
 docker compose ps
 ```
 
-Then check MySQL logs:
+Check MySQL logs:
 
 ```bash
 docker compose logs db
@@ -604,422 +1489,274 @@ The backend should use:
 db:3306
 ```
 
-and not:
+not:
 
 ```text
 localhost:3306
 ```
 
----
+## Backend Health Check Fails
 
-## Backend health check fails
-
-Check the backend logs:
+Check:
 
 ```bash
 docker compose logs backend
 ```
 
-Also verify that the Spring Boot Actuator health endpoint is available:
+Verify:
 
 ```text
 /actuator/health
 ```
 
-The compose healthcheck probes it with `curl` (present in the backend's
-`eclipse-temurin` image). Expected answers: `200` for `UP` **and** for
-`DEGRADED` (e.g. SMTP unreachable — this is normal and must not block the
-stack); `503` means MySQL or Redis is down — check those services first.
+The backend health endpoint returns HTTP 200 for `UP` and `DEGRADED`.
 
----
+An optional integration such as SMTP should not prevent the backend from being considered healthy.
 
-## Frontend cannot connect to backend
+MySQL or Redis failures return HTTP 503 and should be investigated.
 
-Check that the backend is running:
+## Frontend Cannot Connect to Backend
 
-```bash
-docker compose ps
-```
+Verify that the backend is running.
 
-Then check:
+Check the frontend runtime API configuration and the Nginx `/api` proxy.
 
-```text
-http://localhost:8080
-```
+In the EC2 environment, browser requests should use the frontend's same-origin API route rather than exposing the backend directly.
 
-Also verify the frontend environment/API configuration.
+## EC2 Cannot Pull Images from ECR
 
-Remember that browser requests are made from the user's machine, so the frontend normally accesses the backend through the exposed host port:
-
-```text
-http://localhost:8080
-```
-
-rather than:
-
-```text
-http://backend:8080
-```
-
-`backend` is a Docker-network hostname and is primarily useful for container-to-container communication.
-
----
-
-# Development Workflow
-
-A typical development workflow is:
-
-```text
-1. Pull latest code
-       ↓
-2. Update backend/frontend repositories
-       ↓
-3. Update .env if necessary
-       ↓
-4. docker compose up --build
-       ↓
-5. Develop and test
-       ↓
-6. docker compose logs -f
-       ↓
-7. docker compose down
-```
-
-For example:
+Verify AWS authentication:
 
 ```bash
-cd onecare-backend
-git pull
-
-cd ../onecare-frontend
-git pull
-
-cd ../onecare-infra
-git pull
-
-docker compose up --build
+aws sts get-caller-identity
 ```
 
----
-
-# Prod-like mode (DDP-#49 / DKR-04)
-
-`docker-compose.prod.yml` layers a production-style run on top of the normal
-stack — one source of truth for db/cache/backend/chatbot, with only the
-differences restated:
-
-- **frontend** runs `Dockerfile.prod` (built `dist/` served by unprivileged
-  nginx on port 8080, no source bind-mounts), reports `/healthz`, and proxies
-  same-origin `/api` to the `backend` service
-- **only the frontend port is published**; MySQL, Redis, backend and chatbot
-  have no host port mappings and are reachable only on the internal Compose
-  network (browser traffic goes through the frontend proxy)
-- **the frontend waits for the backend with `service_healthy`** — it starts
-  only once the backend's `/actuator/health` answers HTTP 200 (`UP` *or*
-  `DEGRADED`; SMTP outages deliberately stay healthy — AC4) and is held back
-  when MySQL/Redis are down (503)
-- **the backend runs the `staging` profile** in this layer by default; set
-  `SPRING_PROFILES_ACTIVE=prod` in `.env` for a production host (the base
-  layer alone defaults to `dev`)
-- TLS/HTTPS terminates at the edge (load balancer or host proxy), never
-  inside the containers
+Authenticate Docker:
 
 ```bash
-# Local prod-like run (builds the image from Dockerfile.prod first)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml build
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-
-# Staging deploy: use the SHA-tagged image CI pushed to GHCR (no rebuild)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml pull frontend
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+aws ecr get-login-password \
+  --region ap-southeast-2 \
+  | docker login \
+      --username AWS \
+      --password-stdin AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com
 ```
 
-The image tag comes from `FRONTEND_IMAGE` (always `sha-<commit>`, never
-`latest` — the same SHA promotes from staging to production). The API origin
-the SPA reads at runtime is written into `/config.json` from
-`RUNTIME_API_BASE_URL` when the container starts, so no rebuild is needed
-per environment.
+Verify that the image exists:
+
+```bash
+aws ecr describe-images \
+  --repository-name onecare-backend \
+  --region ap-southeast-2
+```
+
+Also verify that the requested SHA tag exists.
+
+## Container Fails After Deployment
+
+Check:
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  ps
+```
+
+Then:
+
+```bash
+docker compose \
+  --env-file .env.ec2ecr \
+  -f docker-compose.ec2ecr.yml \
+  logs -f
+```
+
+Investigate the failing service before attempting another deployment.
 
 ---
 
-# Staging on EC2 (DDP-#49 / DKR-06)
+# 21. CI – Infrastructure Repository
 
-Staging is an EC2 host running the prod-like Compose stack. Deployments are
-driven by `.github/workflows/deploy.yml` (manual dispatch, explicit image
-SHA); the remote logic lives in `scripts/deploy-staging.sh` (shellcheck
-clean, behaviour covered by a stubbed test harness).
-
-**One-time host bootstrap:**
-
-1. Install Docker Engine + Compose v2; add the deploy user to the `docker`
-   group.
-2. Create `/opt/onecare` (or `vars.STAGING_REMOTE_DIR`) containing
-   `docker-compose.yml`, `docker-compose.prod.yml` and a populated `.env`
-   (start from `.env.example`; use strong unique secrets, never reuse the
-   dev values).
-3. Build the backend and chatbot images once
-   (`docker compose build backend chatbot`); deploys never build on the host.
-4. Optionally terminate TLS at an edge proxy in front of the frontend port
-   (`FRONTEND_BIND=127.0.0.1` when the edge runs on the same host).
-
-**Repository configuration:**
-
-| Name                | Type   | Purpose                                          |
-| ------------------- | ------ | ------------------------------------------------ |
-| `STAGING_HOST`      | secret | EC2 public DNS/IP                                |
-| `STAGING_SSH_KEY`   | secret | Private key for the deploy user                  |
-| `GHCR_PULL_TOKEN`   | secret | `read:packages` token used to pull the frontend image |
-| `STAGING_SSH_USER`  | variable | SSH user (default `ubuntu`)                    |
-| `STAGING_REMOTE_DIR`| variable | Compose dir on the host (default `/opt/onecare`) |
-
-**Deploy / rollback:** Actions → `deploy-staging` → run with the frontend
-commit SHA (`sha-<commit>` tag pushed by the frontend CI). The script
-upserts `FRONTEND_IMAGE` in the host `.env`, pulls only the frontend image,
-recreates that container, and verifies `/healthz`, `/config.json` and the
-`/api` proxy chain. If any check fails it automatically redeploys the
-previous SHA and fails the run; to roll back manually, re-run the workflow
-with the previous SHA.
-
-**Smoke:** after deploying, run the `staging-smoke` workflow in
-`onecare-frontend` with `SMOKE_BASE_URL=https://<staging-host>`.
-
----
-
-# Environment Variables
-
-The following variables are configured through `.env`:
-
-| Variable                   | Description                   |
-| -------------------------- | ----------------------------- |
-| `DB_HOST`                  | MySQL Docker service hostname |
-| `DB_PORT`                  | MySQL host port               |
-| `DB_NAME`                  | Database name                 |
-| `DB_USER`                  | Application database user     |
-| `DB_PASSWORD`              | Application database password |
-| `DB_ROOT_PASSWORD`         | MySQL root password           |
-| `BACKEND_PORT`             | Backend host port             |
-| `FRONTEND_PORT`            | Frontend host port (also the CORS origin allowed by the backend) |
-| `CHATBOT_PORT`             | Chatbot host port             |
-| `CHATBOT_DB_PASSWORD`      | Password of the dedicated `chatbot_app` database user |
-| `CHATBOT_SERVICE_TOKEN`    | Spring Boot → Django service token (min. 32 characters) |
-| `DJANGO_SECRET_KEY`        | Optional Django secret key (local development only) |
-| `REDIS_HOST`               | Redis Docker service hostname |
-| `REDIS_PORT`               | Redis host port               |
-| `JWT_SECRET`               | JWT signing secret            |
-| `JWT_ACCESS_TOKEN_EXPIRY`  | Access token expiration       |
-| `JWT_REFRESH_TOKEN_EXPIRY` | Refresh token expiration      |
-| `SPRING_PROFILES_ACTIVE`   | Spring profile (`dev`/`staging`/`prod`); base layer defaults to `dev`, the prod-like layer to `staging` |
-| `BACKUP_ENCRYPTION_KEY`    | **Required** base64 AES-256-GCM key for backups (`openssl rand -base64 32`); compose `:?` gate |
-| `COLUMN_ENCRYPTION_KEY`    | Optional base64 AES-256 key for column encryption (empty = off) |
-| `SMTP_HOST`                | SMTP server host (unreachable ⇒ health `DEGRADED`, never blocks the stack) |
-| `SMTP_PORT`                | SMTP server port              |
-| `SMTP_USERNAME`            | SMTP user (e.g. email address) |
-| `SMTP_PASSWORD`            | SMTP password / app password  |
-| `RUNTIME_API_BASE_URL`     | Prod-like mode: API origin written to the frontend's `/config.json` (default `/api`) |
-| `FRONTEND_IMAGE`           | Prod-like mode: frontend image tag (`sha-<commit>` from GHCR, never `latest`) |
-| `FRONTEND_BIND`            | Prod-like mode: address the frontend port binds to (default `0.0.0.0`; `127.0.0.1` behind a same-host edge proxy) |
-
-Derived inside `docker-compose.yml` (no separate variable needed):
-
-| Compose sets                              | Value                                             |
-| ----------------------------------------- | ------------------------------------------------- |
-| `FRONTEND_ALLOWED_ORIGINS` (backend)      | `http://localhost:FRONTEND_PORT`, `http://127.0.0.1:FRONTEND_PORT` |
-| `PASSWORD_RESET_FRONTEND_BASE_URL`        | `http://localhost:FRONTEND_PORT`                  |
-| `CHATBOT_BASE_URL` (backend)                | `http://chatbot:8000` (compose network)           |
-| `VITE_API_BASE_URL` (frontend)            | `http://localhost:BACKEND_PORT/api`               |
-| `DB_NAME` / `DB_USER` (chatbot)           | `onecare_chatbot` / `chatbot_app` (fixed by the chatbot repo) |
-
----
-
-# Security Notes
-
-* Never commit `.env`.
-* Never commit production secrets.
-* Use `.env.example` to document required variables.
-* Use strong values for `JWT_SECRET`, `BACKUP_ENCRYPTION_KEY` and
-  `COLUMN_ENCRYPTION_KEY` (`openssl rand -base64 32`) — no key defaults exist
-  on purpose (AC2/AC3).
-* Local development credentials must not be reused in production.
-* Production deployment should use a proper secrets-management solution.
-
-## Upgrading an existing deployment to DDP-#49
-
-The backend now boots a packaged profile (`SPRING_PROFILES_ACTIVE`, `dev` in
-the base layer, `staging` in the prod-like layer) and healthchecks against
-`/actuator/health`. Before the next `up` on a host whose `.env` predates this
-ticket:
-
-1. Add `BACKUP_ENCRYPTION_KEY` to the host `.env` (`openssl rand -base64 32`)
-   — compose refuses to start without it (`:?` gate).
-2. Add `SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD` (replacing the
-   old `SPRING_MAIL_USERNAME`/`SPRING_MAIL_PASSWORD`) — optional, but the
-   stack is unhealthy-free without them (health reports `DEGRADED`).
-3. Rebuild the backend image once (`docker compose build backend`) after the
-   backend repository contains the DDP-#49 actuator/profile changes — an
-   image without `/actuator/health` fails the healthcheck and (in the
-   prod-like layer) blocks the frontend.
-4. Staging hosts: `scripts/deploy-staging.sh` enforces
-   `SPRING_PROFILES_ACTIVE=staging` in the host `.env` automatically.
-
----
-
-# Current Infrastructure Model
-
-The current Docker Compose configuration builds the frontend, backend, and chatbot from their local repositories:
+The infrastructure repository maintains:
 
 ```text
-onecare-infra
-      │
-      ├── ../onecare-backend
-      │          ↓
-      │      Docker build
-      │
-      ├── ../onecare-chatbot
-      │          ↓
-      │      Docker build
-      │
-      └── ../onecare-frontend
-                 ↓
-             Docker build
+.github/workflows/ci.yml
 ```
 
-MySQL and Redis are pulled from their respective public container images.
+The CI workflow validates Docker Compose configurations.
+
+The validation process includes:
+
+1. Validate the local Docker Compose configuration.
+2. Validate the production-like Compose configuration.
+3. Validate the EC2 ECR Compose configuration.
+4. Check that required environment variables are documented.
+5. Check for hard-coded secrets in Compose files.
+6. Verify that the Compose configurations can be parsed successfully.
+
+Example local validation:
+
+```bash
+docker compose \
+  --env-file .env.example \
+  config --quiet
+```
+
+Production-like validation:
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  --env-file .env.example \
+  config --quiet
+```
+
+EC2 ECR configuration validation should use an appropriate example environment file containing non-secret placeholder values.
+
+CI validates configuration only. It does not deploy to EC2 during pull requests.
 
 ---
 
-# Future Container Registry Model
+# 22. Security Notes
 
-In a future CI/CD implementation, backend and frontend images can be built automatically by GitHub Actions and pushed to a container registry such as GitHub Container Registry (GHCR).
+Security is an important part of the OneCare infrastructure.
 
-The architecture could then become:
+Follow these requirements:
+
+- Never commit `.env` or `.env.ec2ecr`.
+- Never commit production secrets.
+- Use secure AWS authentication.
+- Restrict ECR access to authorized repositories.
+- Use immutable image tags.
+- Enable ECR image scanning.
+- Use strong JWT and Django secrets.
+- Use secure AES-256-GCM backup encryption keys.
+- Keep MySQL and Redis inaccessible from the public internet.
+- Expose only the frontend application entry point.
+- Use HTTPS through a properly configured edge proxy or load balancer.
+- Maintain persistent database storage.
+- Maintain regular database backups.
+- Validate application health after deployment.
+
+GitHub OIDC integration is a planned security improvement for automated AWS authentication.
+
+For production deployments, use AWS Secrets Manager or another suitable secrets-management solution instead of relying indefinitely on manually maintained environment files.
+
+---
+
+# 23. Technology Stack
+
+| Category | Technology |
+|---|---|
+| Frontend | React |
+| Frontend Build Tool | Vite |
+| Frontend Web Server | Nginx |
+| Backend | Spring Boot |
+| Backend Language | Java 21 |
+| Chatbot | Django + DRF |
+| Chatbot Language | Python 3.11 |
+| Database | MySQL 8.4 |
+| Cache | Redis 7 |
+| Containerization | Docker |
+| Container Orchestration | Docker Compose |
+| Container Registry | AWS ECR |
+| Cloud Hosting | AWS EC2 |
+| CI | GitHub Actions |
+| Future AWS Authentication | GitHub OIDC |
+
+---
+
+# 24. Summary
+
+The OneCare Infrastructure repository provides a centralized solution for local development and AWS deployment.
+
+It supports two deployment workflows.
+
+## Local Development
 
 ```text
-Backend Repository
-       ↓
-GitHub Actions
-       ↓
-Backend Docker Image
-       ↓
-Container Registry
-       ↓
-       ┐
-       │
-       ↓
-Infrastructure Docker Compose
-       ↑
-       │
-       ┘
-       ↓
-Frontend Docker Image
-       ↑
-GitHub Actions
-       ↑
-Frontend Repository
+Application Repositories
+          |
+          v
+     Docker Compose
+          |
+          v
+    Local Docker Builds
+          |
+          v
+   Complete Application
 ```
 
-The Compose configuration would then use:
-
-```yaml
-backend:
-  image: <backend-registry-image>
-
-frontend:
-  image: <frontend-registry-image>
-```
-
-Instead of:
-
-```yaml
-backend:
-  build:
-    context: ../onecare-backend
-
-frontend:
-  build:
-    context: ../onecare-frontend
-```
-
-This is **not required for the current local development setup** and can be introduced later as part of the CI/CD/container registry implementation.
-
----
-
-# Technology Stack
-
-* Docker
-* Docker Compose
-* React
-* Vite
-* Node.js 20
-* Spring Boot
-* Java 21
-* Django
-* Python 3.11
-* MySQL 8.4
-* Redis 7
-* GitHub Actions
----
-
-## Summary
-
-The purpose of this repository is to provide a **single local environment for the complete OneCare application**.
-
-After the repositories are cloned into the correct structure, developers can start the entire environment with:
+Start the local environment using:
 
 ```bash
 cd onecare-infra
+
 docker compose up --build
 ```
 
-This starts:
+## Current AWS EC2 Deployment
 
 ```text
-React Frontend
-      +
-Spring Boot Backend
-      +
-Django Chatbot
-      +
-MySQL Database
-      +
-Redis Cache
+Frontend Repository
+Backend Repository
+Chatbot Repository
+          |
+          v
+   Manual Docker Builds
+          |
+          v
+   Manual ECR Publishing
+          |
+          v
+       AWS ECR
+          |
+          v
+      AWS EC2
+          |
+    Manual Deployment
+          |
+          v
+     Docker Compose
+          |
+    +-----+-----+
+    |     |     |
+    v     v     v
+ Frontend Backend Chatbot
+          |
+      +---+---+
+      |       |
+      v       v
+    MySQL   Redis
 ```
 
-without requiring developers to manually start each service.
+## Future Automated Deployment
 
----
+```text
+Application Repositories
+          |
+          v
+     GitHub Actions
+          |
+          v
+    Automated CI/CD
+          |
+          v
+     AWS OIDC
+          |
+          v
+        AWS ECR
+          |
+          v
+       AWS EC2
+          |
+          v
+     Docker Compose
+```
 
-# Continuous Integration
+GitHub OIDC and automated EC2 deployment are planned improvements and are not currently implemented.
 
-CI runs on pushes and pull requests to `develop` / `main`. Two workflows are involved.
+The main responsibility of `onecare-infra` is to manage the complete application infrastructure, maintain the Docker Compose configurations and coordinate the deployment of the frontend, backend and chatbot images from AWS ECR to the EC2 instance.
 
-## This repository — `.github/workflows/ci.yml`
-
-Job `compose-validation`:
-
-1. Validates `docker-compose.yml` against `.env.example`
-   (`docker compose --env-file .env.example config --quiet`) — this is the clean-checkout
-   state, where no `.env` exists yet, so a documented command must resolve before anything starts.
-2. Validates the prod-like layer the same way
-   (`docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.example config --quiet`).
-3. Fails if a secret is hard-coded in either compose file (values must come from `.env` via `${VAR}`).
-4. Fails if any variable read by either compose file is missing from `.env.example`.
-
-## Chatbot repository — `.github/workflows/ci.yml`
-
-Job `chatbot` (the chat service, one job):
-
-1. Checks out the chatbot repository and installs Python 3.11.9.
-2. Validates dependency pins (`scripts/check_pins.py`).
-3. Runs `ruff check .`.
-4. Starts a MySQL 8 service container, waits until it accepts logins, then provisions the
-   dedicated schema and restricted user (`db/create_chatbot_schema.ps1`) plus the CI stand-in schema.
-5. Runs `python manage.py migrate`, asserts a **second migrate is a no-op** (AC3 idempotency),
-   and `python manage.py makemigrations --check --dry-run`.
-6. Runs the test suite `pytest -m "not embedding"` **against MySQL 8** (with coverage).
-7. Runs `pip-audit` vulnerability scanning.
-8. Builds the chatbot Docker image (`docker build -t onecare-chat .`).
-
-Job `embedding-smoke` runs the embedding smoke test as a **separate** job (INFRA-02).
-
-> The chatbot Docker image runs `scripts/entrypoint.sh`, which applies migrations and only then
-> starts gunicorn; a migration failure exits non-zero and stops the container (AC3).
+This architecture allows OneCare to deploy and test the application using the current manual process while providing a clear path towards automated CI/CD in the future.
