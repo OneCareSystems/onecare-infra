@@ -1395,6 +1395,7 @@ The following table describes the primary environment variables used by the infr
 | `CHATBOT_IMAGE_TAG` | Chatbot ECR image tag |
 | `LLM_API_KEY` | LLM provider API key |
 | `GROQ_API_KEY` | Groq API key |
+| `LLM_MAX_TOKENS` | Maximum tokens requested from the LLM |
 
 The exact variables required depend on the Compose configuration and application settings.
 

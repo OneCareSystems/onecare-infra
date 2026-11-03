@@ -259,7 +259,7 @@ services:
 
       LLM_REASONING_EFFORT: low
       LLM_TIMEOUT_SECONDS: "30"
-      LLM_MAX_TOKENS: "2048"
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:?Set LLM_MAX_TOKENS in .env}
       LLM_TEMPERATURE: "0"
       LLM_CONNECT_TIMEOUT: "3"
       LLM_MAX_RETRIES: "1"
@@ -352,7 +352,7 @@ services:
       LLM_PROVIDER: groq
       LLM_REASONING_EFFORT: low
       LLM_TIMEOUT_SECONDS: "30"
-      LLM_MAX_TOKENS: "2048"
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:?Set LLM_MAX_TOKENS in .env}
 
       CHAT_GENERATOR_CLASS: chat_pipeline.generation.LLMGenerator
 
