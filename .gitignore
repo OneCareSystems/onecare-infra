@@ -1,4 +1,5 @@
 .env
+.env.ec2ecr
 .vscode
-# Local-only compose overrides (e.g. dev-machine port conflicts); never committed.
+
 docker-compose.local.yml

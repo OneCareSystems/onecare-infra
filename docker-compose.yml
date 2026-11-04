@@ -1,48 +1,41 @@
 services:
 
   # ============================================================
-  # MySQL Database
+  # MySQL Database (OneCare + Dedicated Chatbot Schema)
   # ============================================================
   db:
     image: mysql:8.4
     container_name: onecare-db
     restart: unless-stopped
 
-    # Same charset/collation as onecare-chatbot (Django expects utf8mb4_0900_ai_ci)
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
 
     environment:
-      MYSQL_DATABASE: ${DB_NAME}
-      MYSQL_USER: ${DB_USER}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:?Set DB_NAME in .env}
+      MYSQL_USER: ${DB_USER:?Set DB_USER in .env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
 
     ports:
-      - "${DB_PORT}:3306"
+      - "${DB_PORT:-3306}:3306"
 
     volumes:
       - mysql-data:/var/lib/mysql
-      # INFRA-03: creates the chatbot's dedicated schema (onecare_chatbot) and its
-      # least-privilege user (chatbot_app) ONCE, on a fresh MySQL volume.
-      # Runs only at first initialisation -> use `docker compose down -v` if the
-      # volume predates this mount.
+
+      # Creates the dedicated chatbot schema and user
+      # Only executes when MySQL initializes a fresh volume
       - ../onecare-chatbot/docker/mysql/init:/docker-entrypoint-initdb.d:ro
 
     healthcheck:
       test:
-        [
-          "CMD",
-          "mysqladmin",
-          "ping",
-          "-h",
-          "localhost",
-          "-u${DB_USER}",
-          "-p${DB_PASSWORD}"
-        ]
+        - CMD-SHELL
+        - 'mysqladmin ping -h 127.0.0.1 -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}" --silent'
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 20s
+      start_period: 30s
 
     networks:
       - onecare-network
@@ -57,7 +50,7 @@ services:
     restart: unless-stopped
 
     ports:
-      - "${REDIS_PORT}:6379"
+      - "${REDIS_PORT:-6379}:6379"
 
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -82,9 +75,6 @@ services:
     restart: unless-stopped
 
     environment:
-      # DDP-#49 / AC1: the base application.properties is git-ignored (secrets
-      # live only in .env), so a fresh clone must start with a PACKAGED
-      # profile. The prod-like layer overrides this default to staging.
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
 
       SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
@@ -94,59 +84,47 @@ services:
 
       SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.MySQLDialect
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
+
       SPRING_SQL_INIT_MODE: always
       SPRING_SQL_INIT_SCHEMA_LOCATIONS: classpath:schema.sql
 
-      # Required: compose refuses to start the stack without these, naming the
-      # variable but never its value (AC3). No defaults on purpose.
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (openssl rand -base64 32, see .env.example)}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       JWT_ACCESS_TOKEN_EXPIRY: ${JWT_ACCESS_TOKEN_EXPIRY}
       JWT_REFRESH_TOKEN_EXPIRY: ${JWT_REFRESH_TOKEN_EXPIRY}
 
-      # DDP-31: base64 AES-256-GCM key for backup archives; staging/prod
-      # profiles fail startup without it (AC3). Same :? gate as JWT_SECRET.
-      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Set BACKUP_ENCRYPTION_KEY in .env (openssl rand -base64 32, see .env.example)}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Set BACKUP_ENCRYPTION_KEY in .env}
       BACKUP_STORAGE_DIR: /app/backups
-      # AES-256 column-encryption key: no consumer yet, the variable flows
-      # through until the encrypting module lands (empty = feature off).
+
       COLUMN_ENCRYPTION_KEY: ${COLUMN_ENCRYPTION_KEY:-}
 
       REDIS_HOST: cache
       REDIS_PORT: 6379
 
-      # DDP-16: SMTP_* reach spring.mail.* through the active profile. An
-      # unreachable gateway must NOT stop the stack - /actuator/health then
-      # reports DEGRADED (HTTP 200, container stays healthy; AC4).
-      SMTP_HOST: ${SMTP_HOST:-localhost}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USERNAME: ${SMTP_USERNAME:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: 587
+      SMTP_USERNAME: ${SMTP_USERNAME:?Set SMTP_USERNAME in .env}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?Set SMTP_PASSWORD in .env}
 
       PASSWORD_RESET_FRONTEND_BASE_URL: ${PASSWORD_RESET_FRONTEND_BASE_URL}
-      # Every profile reads password-reset.frontend-base-url from FRONTEND_URL.
       FRONTEND_URL: ${PASSWORD_RESET_FRONTEND_BASE_URL}
-
       FRONTEND_ALLOWED_ORIGINS: ${FRONTEND_ALLOWED_ORIGINS}
-      # Python chatbot proxy (renamed from chatbot.url by the DDP-39 merge).
-      CHATBOT_BASE_URL: http://chatbot:8000
-      # chatbot.service-token=${CHATBOT_SERVICE_TOKEN} has no default in ANY
-      # profile - the backend needs the same token the chatbot service gates.
-      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?Set CHATBOT_SERVICE_TOKEN in .env (min 32 chars, see .env.example)}
 
+      # Internal Docker service communication
+      CHATBOT_BASE_URL: http://chatbot:8000
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?CHATBOT_SERVICE_TOKEN is required}
 
     ports:
-      - "${BACKEND_PORT}:8080"
+      - "${BACKEND_PORT:-8080}:8080"
 
     volumes:
-      # DDP-31: backup archives (backup.storage-dir) survive restarts/rebuilds.
       - backup-data:/app/backups
 
-    # DDP-#49 / DKR-04 AC3: the backend exposes /actuator/health (permitAll).
-    # DEGRADED (e.g. SMTP unreachable) maps to HTTP 200, so the container stays
-    # healthy; MySQL/Redis failures return 503 and mark it unhealthy - only
-    # those two gate the stack (AC4 / SDS 2.5.1). curl ships with temurin.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/actuator/health"]
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://127.0.0.1:8080/actuator/health
       interval: 10s
       timeout: 5s
       retries: 12
@@ -163,7 +141,86 @@ services:
 
 
   # ============================================================
-  # Django Chatbot
+  # Chatbot Shared Storage Initialization
+  # ============================================================
+  chatbot-storage-init:
+    build:
+      context: ../onecare-chatbot
+      dockerfile: Dockerfile
+
+    container_name: onecare-chatbot-storage-init
+
+    user: "0:0"
+
+    entrypoint: ["/bin/sh", "-c"]
+
+    command:
+      - |
+        mkdir -p /app/storage/vectors /app/storage/faiss &&
+        chown -R appuser:appuser /app/storage &&
+        chmod -R u+rwX /app/storage &&
+        echo "Chatbot storage permissions initialized successfully"
+
+    volumes:
+      - chatbot_storage:/app/storage
+
+    restart: "no"
+
+    networks:
+      - onecare-network
+
+
+  # ============================================================
+  # Django Chatbot Database Migrations
+  # ============================================================
+  chatbot-migrate:
+    build:
+      context: ../onecare-chatbot
+      dockerfile: Dockerfile
+
+    container_name: onecare-chatbot-migrate
+
+    environment:
+      
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
+
+      # Dedicated chatbot database schema
+      DB_NAME: ${CHATBOT_DB_NAME:?Set CHATBOT_DB_NAME in .env}
+      DB_USER: ${CHATBOT_DB_USER:?Set CHATBOT_DB_USER in .env}
+      DB_PASSWORD: ${CHATBOT_DB_PASSWORD:?Set CHATBOT_DB_PASSWORD in .env}
+      DB_HOST: db
+      DB_PORT: "3306"
+
+      # Main OneCare database user (if required by chatbot integration)
+      MAIN_DB_USER: ${DB_USER}
+
+      ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,chatbot,backend}
+
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?CHATBOT_SERVICE_TOKEN is required}
+      CHATBOT_STORAGE_DIR: /app/storage
+
+    command:
+      - python
+      - manage.py
+      - migrate
+
+    volumes:
+      - chatbot_storage:/app/storage
+
+    depends_on:
+      db:
+        condition: service_healthy
+      chatbot-storage-init:
+        condition: service_completed_successfully
+
+    restart: "no"
+
+    networks:
+      - onecare-network
+
+
+  # ============================================================
+  # Django Chatbot API
   # ============================================================
   chatbot:
     build:
@@ -174,29 +231,65 @@ services:
     restart: unless-stopped
 
     environment:
-      # INFRA-03: the chatbot owns a DEDICATED schema. db_config.py refuses to start
-      # unless DB_NAME is onecare_chatbot and DB_USER is not the Spring Boot user/root.
-      DB_NAME: ${CHATBOT_DB_NAME}
-      DB_USER: ${CHATBOT_DB_USER}
-      # Dev/CI password: must match 01_schemas_and_users.sql in the chatbot repo
-      # (that script is what GRANTs this user its least-privilege rights).
-      DB_PASSWORD: ${CHATBOT_DB_PASSWORD}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
+
+      DB_NAME: ${CHATBOT_DB_NAME:?Set CHATBOT_DB_NAME in .env}
+      DB_USER: ${CHATBOT_DB_USER:?Set CHATBOT_DB_USER in .env}
+      DB_PASSWORD: ${CHATBOT_DB_PASSWORD:?Set CHATBOT_DB_PASSWORD in .env}
       DB_HOST: db
-      DB_PORT: ${DB_PORT}
+      DB_PORT: "3306"
+
       MAIN_DB_USER: ${DB_USER}
 
-      # settings.py: CHATBOT_SERVICE_TOKEN must be >= 32 characters (Spring Boot -> Django auth)
-      # Fails fast with a clear message when the key is missing/empty instead of a Django traceback.
-      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?Set CHATBOT_SERVICE_TOKEN in .env (min 32 chars, see .env.example)}
-      # FAISS index + uploaded PDFs, kept on a named volume instead of inside the container
+      # Django host configuration
+      ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,chatbot,backend}
+
+      DJANGO_DEBUG: "0"
+
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?CHATBOT_SERVICE_TOKEN is required}
       CHATBOT_STORAGE_DIR: /app/storage
 
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
-      DJANGO_DEBUG: "0"
-      DJANGO_ALLOWED_HOSTS: chatbot,backend,localhost,127.0.0.1
+      # LLM configuration
+      LLM_PROVIDER: groq
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
 
-    # Run Django migrations against the dedicated schema before serving
-    command: sh -c "python manage.py migrate && gunicorn onecare_chat.wsgi:application --bind 0.0.0.0:8000"
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
+
+      LLM_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "30"
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:?Set LLM_MAX_TOKENS in .env}
+      LLM_TEMPERATURE: "0"
+      LLM_CONNECT_TIMEOUT: "3"
+      LLM_MAX_RETRIES: "1"
+
+      CHAT_GENERATOR_CLASS: chat_pipeline.generation.LLMGenerator
+
+      # Embedding configuration
+      KB_EMBEDDING_LOCAL_FILES_ONLY: "false"
+      KB_PRELOAD_EMBEDDER: "true"
+      EMBEDDING_MODEL: intfloat/multilingual-e5-small
+
+      # Knowledge base configuration
+      KB_MAX_UPLOAD_BYTES: "10485760"
+      KB_URL_ALLOWLIST: ${KB_URL_ALLOWLIST:-who.int,nhs.uk,cdc.gov}
+
+      # Chat configuration
+      CHAT_CONTEXT_CHUNKS: "4"
+      CHAT_CONTEXT_CHARS_PER_CHUNK: "2500"
+      CHAT_TRANSLATE_TAMIL_SEARCH: "true"
+      CHAT_SEARCH_TIMEOUT_SECONDS: "15"
+
+      # Logging
+      CHAT_LOG_ENABLED: "true"
+      CHAT_LOG_REDACT: "true"
+
+    command:
+      - gunicorn
+      - onecare_chat.wsgi:application
+      - --bind
+      - 0.0.0.0:8000
 
     ports:
       - "127.0.0.1:${CHATBOT_PORT:-8000}:8000"
@@ -205,25 +298,84 @@ services:
       - chatbot_storage:/app/storage
 
     healthcheck:
-      # Live route is /internal/health (the old /api/chatbot/health/ URL was
-      # never routed) and it requires the Spring Boot -> Django service token,
-      # so the probe authenticates with the token already in this container's
-      # environment. 401 (wrong token) or unreachable => unhealthy.
       test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import os, urllib.request as u; r = u.Request('http://127.0.0.1:8000/internal/health', headers={'Authorization': 'Bearer ' + os.environ['CHATBOT_SERVICE_TOKEN']}); u.urlopen(r, timeout=5)",
-        ]
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request as u; r = u.Request('http://127.0.0.1:8000/internal/health', headers={'Authorization': 'Bearer ' + os.environ['CHATBOT_SERVICE_TOKEN']}); u.urlopen(r, timeout=5)"
       interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 45s
+      start_period: 90s
 
     depends_on:
-      db:
-        condition: service_healthy
+      chatbot-migrate:
+        condition: service_completed_successfully
+
+    networks:
+      - onecare-network
+
+
+  # ============================================================
+  # Chatbot Background Document Ingestion Worker
+  # ============================================================
+  chatbot-ingestion-worker:
+    build:
+      context: ../onecare-chatbot
+      dockerfile: Dockerfile
+
+    container_name: onecare-chatbot-ingestion-worker
+    restart: unless-stopped
+
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
+
+      DB_NAME: ${CHATBOT_DB_NAME:?Set CHATBOT_DB_NAME in .env}
+      DB_USER: ${CHATBOT_DB_USER:?Set CHATBOT_DB_USER in .env}
+      DB_PASSWORD: ${CHATBOT_DB_PASSWORD:?Set CHATBOT_DB_PASSWORD in .env}
+      DB_HOST: db
+      DB_PORT: "3306"
+
+      MAIN_DB_USER: ${DB_USER}
+
+      ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,chatbot,backend}
+
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?Set CHATBOT_SERVICE_TOKEN in .env}
+      CHATBOT_STORAGE_DIR: /app/storage
+
+      # LLM configuration required for document ingestion
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
+
+      LLM_PROVIDER: groq
+      LLM_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "30"
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:?Set LLM_MAX_TOKENS in .env}
+
+      CHAT_GENERATOR_CLASS: chat_pipeline.generation.LLMGenerator
+
+      KB_EMBEDDING_LOCAL_FILES_ONLY: "false"
+      KB_PRELOAD_EMBEDDER: "true"
+      EMBEDDING_MODEL: intfloat/multilingual-e5-small
+
+      KB_MAX_UPLOAD_BYTES: "10485760"
+      KB_URL_ALLOWLIST: ${KB_URL_ALLOWLIST:-who.int,nhs.uk,cdc.gov}
+
+    command:
+      - python
+      - manage.py
+      - run_ingestion_worker
+      - --interval
+      - "5"
+
+    volumes:
+      - chatbot_storage:/app/storage
+
+    depends_on:
+      chatbot-migrate:
+        condition: service_completed_successfully
 
     networks:
       - onecare-network
@@ -245,8 +397,8 @@ services:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL}
 
     ports:
-      - "${FRONTEND_PORT}:3000"
-    
+      - "${FRONTEND_PORT:-3000}:8080"
+
     volumes:
       - ../onecare-frontend:/app
       - /app/node_modules
@@ -256,23 +408,21 @@ services:
 
 
 # ============================================================
-# Volumes
+# Persistent Volumes
 # ============================================================
 volumes:
   mysql-data:
     name: onecare-mysql-data
 
-  # FAISS index + uploaded PDFs for the chatbot
   chatbot_storage:
     name: onecare-chatbot-storage
 
-  # DDP-31: backend backup archives (BACKUP_STORAGE_DIR=/app/backups)
   backup-data:
     name: onecare-backup-data
 
 
 # ============================================================
-# Network
+# Internal Network
 # ============================================================
 networks:
   onecare-network:

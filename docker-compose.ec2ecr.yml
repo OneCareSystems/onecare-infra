@@ -1,0 +1,300 @@
+services:
+
+  # ============================================================
+  # MySQL Database
+  # ============================================================
+  db:
+    image: mysql:8.4
+    container_name: onecare-db
+    restart: unless-stopped
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_DATABASE: onecare
+      MYSQL_USER: ${MYSQL_USER:?Set MYSQL_USER in .env.ec2ecr}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env.ec2ecr}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env.ec2ecr}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # Creates the chatbot database and account on first initialization.
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u$${MYSQL_USER} -p$${MYSQL_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - onecare-network
+
+
+  # ============================================================
+  # Redis Cache
+  # ============================================================
+  cache:
+    image: redis:7-alpine
+    container_name: onecare-cache
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - onecare-network
+
+  # ============================================================
+  # Chatbot Shared Storage Initialization
+  # ============================================================
+  chatbot-storage-init:
+    image: ${CHATBOT_IMAGE:?Set CHATBOT_IMAGE in .env.ec2ecr}
+    container_name: onecare-chatbot-storage-init
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /app/storage/vectors /app/storage/faiss &&
+        chown -R appuser:appuser /app/storage &&
+        chmod -R u+rwX /app/storage &&
+        echo "Chatbot storage permissions initialized successfully"
+    volumes:
+      - chatbot_storage:/app/storage
+    restart: "no"
+    networks:
+      - onecare-network
+
+  # ============================================================
+  # Django Chatbot (From ECR)
+  # ============================================================
+  
+  chatbot:
+    image: ${CHATBOT_IMAGE:?Set CHATBOT_IMAGE in .env.ec2ecr}
+    container_name: onecare-chatbot
+    restart: unless-stopped
+    environment: &chatbot-environment
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env.ec2ecr}
+      DJANGO_DEBUG: "0"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?Set DJANGO_ALLOWED_HOSTS in .env.ec2ecr}
+      ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?Set DJANGO_ALLOWED_HOSTS in .env.ec2ecr}
+
+      DB_NAME: onecare_chatbot
+      DB_USER: ${CHATBOT_DB_USER:?Set CHATBOT_DB_USER in .env.ec2ecr}
+      DB_PASSWORD: ${CHATBOT_DB_PASSWORD:?Set CHATBOT_DB_PASSWORD in .env.ec2ecr}
+      DB_HOST: db
+      DB_PORT: "3306"
+
+      MAIN_DB_USER: ${MYSQL_USER:?Set MYSQL_USER in .env.ec2ecr}
+      MAIN_DB_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env.ec2ecr}
+
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?Set CHATBOT_SERVICE_TOKEN in .env.ec2ecr}
+      CHATBOT_STORAGE_DIR: /app/storage
+
+      LLM_PROVIDER: ${LLM_PROVIDER:?Set LLM_PROVIDER in .env.ec2ecr}
+      LLM_API_KEY: ${LLM_API_KEY:?Set LLM_API_KEY in .env.ec2ecr}
+      GROQ_API_KEY: ${GROQ_API_KEY:?Set GROQ_API_KEY in .env.ec2ecr}
+      LLM_MODEL: ${LLM_MODEL:?Set LLM_MODEL in .env.ec2ecr}
+      LLM_BASE_URL: ${LLM_BASE_URL:?Set LLM_BASE_URL in .env.ec2ecr}
+      LLM_TIMEOUT_SECONDS: "30"
+      LLM_CONNECT_TIMEOUT: "3"
+      LLM_MAX_RETRIES: "1"
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:?Set LLM_MAX_TOKENS in .env.ec2ecr}
+      LLM_TEMPERATURE: "0"
+      LLM_REASONING_EFFORT: low
+      
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:?Set EMBEDDING_MODEL in .env.ec2ecr}
+      KB_EMBEDDING_LOCAL_FILES_ONLY: "false"
+      KB_PRELOAD_EMBEDDER: "true"
+      KB_MAX_UPLOAD_BYTES: "10485760"
+      KB_URL_ALLOWLIST: ${KB_URL_ALLOWLIST:?Set KB_URL_ALLOWLIST in .env.ec2ecr}
+      
+      CHAT_GENERATOR_CLASS: chat_pipeline.generation.LLMGenerator
+      CHAT_CONTEXT_CHUNKS: "4"
+      CHAT_CONTEXT_CHARS_PER_CHUNK: "2500"
+      CHAT_TRANSLATE_TAMIL_SEARCH: "true"
+      CHAT_SEARCH_TIMEOUT_SECONDS: "15"
+      CHAT_LOG_ENABLED: "true"
+      CHAT_LOG_REDACT: "true"
+
+    command:
+      - gunicorn
+      - onecare_chat.wsgi:application
+      - --bind
+      - 0.0.0.0:8000
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - chatbot_storage:/app/storage
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, urllib.request as u; r = u.Request('http://127.0.0.1:8000/internal/health', headers={'Authorization': 'Bearer ' + os.environ['CHATBOT_SERVICE_TOKEN']}); u.urlopen(r, timeout=5)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    depends_on:
+      chatbot-migrate:
+        condition: service_completed_successfully
+      chatbot-storage-init:
+        condition: service_completed_successfully
+    networks:
+      - onecare-network
+
+  # ============================================================
+  # Django Chatbot Database Migrations
+  # ============================================================
+  chatbot-migrate:
+    image: ${CHATBOT_IMAGE:?Set CHATBOT_IMAGE in .env.ec2ecr}
+    container_name: onecare-chatbot-migrate
+    environment: *chatbot-environment
+    command:
+      - python
+      - manage.py
+      - migrate
+    volumes:
+      - chatbot_storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      chatbot-storage-init:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - onecare-network
+
+  ingestion-worker:
+    image: ${CHATBOT_IMAGE:?Set CHATBOT_IMAGE in .env.ec2ecr}
+    container_name: onecare-ingestion-worker
+    restart: unless-stopped
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env.ec2ecr}
+      DJANGO_DEBUG: "0"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?Set DJANGO_ALLOWED_HOSTS in .env.ec2ecr}
+      ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?Set DJANGO_ALLOWED_HOSTS in .env.ec2ecr}
+
+      DB_NAME: onecare_chatbot
+      DB_USER: ${CHATBOT_DB_USER:?Set CHATBOT_DB_USER in .env.ec2ecr}
+      DB_PASSWORD: ${CHATBOT_DB_PASSWORD:?Set CHATBOT_DB_PASSWORD in .env.ec2ecr}
+      DB_HOST: db
+      DB_PORT: "3306"
+
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?Set CHATBOT_SERVICE_TOKEN in .env.ec2ecr}
+      CHATBOT_STORAGE_DIR: /app/storage
+
+      LLM_PROVIDER: ${LLM_PROVIDER:?Set LLM_PROVIDER in .env.ec2ecr}
+      LLM_API_KEY: ${LLM_API_KEY:?Set LLM_API_KEY in .env.ec2ecr}
+      GROQ_API_KEY: ${GROQ_API_KEY:?Set GROQ_API_KEY in .env.ec2ecr}
+      LLM_MODEL: ${LLM_MODEL:?Set LLM_MODEL in .env.ec2ecr}
+      LLM_BASE_URL: ${LLM_BASE_URL:?Set LLM_BASE_URL in .env.ec2ecr}
+
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:?Set EMBEDDING_MODEL in .env.ec2ecr}
+      KB_EMBEDDING_LOCAL_FILES_ONLY: "false"
+      KB_PRELOAD_EMBEDDER: "true"
+      KB_MAX_UPLOAD_BYTES: "10485760"
+      KB_URL_ALLOWLIST: ${KB_URL_ALLOWLIST:?Set KB_URL_ALLOWLIST in .env.ec2ecr}
+
+    command: python manage.py run_ingestion_worker
+    volumes:
+      - chatbot_storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      chatbot:
+        condition: service_healthy
+    networks:
+      - onecare-network
+
+  # ============================================================
+  # Spring Boot Backend (From ECR)
+  # ============================================================
+  backend:
+    image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE in .env.ec2ecr}
+
+    container_name: onecare-backend
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/onecare?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER:?Set MYSQL_USER in .env.ec2ecr}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env.ec2ecr}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+      SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: org.hibernate.dialect.MySQLDialect
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.ec2ecr}
+      JWT_ACCESS_TOKEN_EXPIRY: ${JWT_ACCESS_TOKEN_EXPIRY:?Set JWT_ACCESS_TOKEN_EXPIRY in .env.ec2ecr}
+      JWT_REFRESH_TOKEN_EXPIRY: ${JWT_REFRESH_TOKEN_EXPIRY:?Set JWT_REFRESH_TOKEN_EXPIRY in .env.ec2ecr}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Set BACKUP_ENCRYPTION_KEY in .env.ec2ecr}
+      BACKUP_STORAGE_DIR: /app/backups
+      REDIS_HOST: cache
+      REDIS_PORT: 6379
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: 587
+      SMTP_USERNAME: ${SMTP_USERNAME:?Set SMTP_USERNAME in .env.ec2ecr}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?Set SMTP_PASSWORD in .env.ec2ecr}
+      PASSWORD_RESET_FRONTEND_BASE_URL: ${PASSWORD_RESET_FRONTEND_BASE_URL:?Set PASSWORD_RESET_FRONTEND_BASE_URL in .env.ec2ecr}
+      FRONTEND_URL: ${FRONTEND_URL:?Set FRONTEND_URL in .env.ec2ecr}
+      FRONTEND_ALLOWED_ORIGINS: ${FRONTEND_ALLOWED_ORIGINS:?Set FRONTEND_ALLOWED_ORIGINS in .env.ec2ecr}
+      CHATBOT_BASE_URL: http://chatbot:8000
+      CHATBOT_SERVICE_TOKEN: ${CHATBOT_SERVICE_TOKEN:?Set CHATBOT_SERVICE_TOKEN in .env.ec2ecr}
+    ports:
+      - "8080:8080"
+    volumes:
+      - backup-data:/app/backups
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    networks:
+      - onecare-network
+
+  # ============================================================
+  # React/Vite Frontend (From ECR)
+  # ============================================================
+  frontend:
+    image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE in .env.ec2ecr}
+
+    container_name: onecare-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: http://localhost:8080/api
+    ports:
+      - "3000:8080"
+    networks:
+      - onecare-network
+
+
+# ============================================================
+# Volumes
+# ============================================================
+volumes:
+  mysql-data:
+    name: onecare-mysql-data
+  chatbot_storage:
+    name: onecare-chatbot-storage
+  backup-data:
+    name: onecare-backup-data
+
+
+# ============================================================
+# Network
+# ============================================================
+networks:
+  onecare-network:
+    name: onecare-network
+    driver: bridge
